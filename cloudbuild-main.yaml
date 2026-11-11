@@ -1,0 +1,313 @@
+# Release pipeline for non-prod (Cloud Build, project ci-cd-511313).
+# Trigger: push to main (every merged PR). Service account: cb-deploy-nonprod (set on the
+# trigger, not here). Org/project apigee-nonprod-511322, envs dev then staging, region us-central1.
+#
+# Order (PLAN P7, D48-D53):
+#   1. npm ci, lint and unit tests on the UNSTAMPED tree (a stamped tree fails kvm-contract tests)
+#   2. stamp commit + KVM version (scripts/stamp-commit.sh), shared token in /workspace/.token
+#   3. dev: db load -> integration (record prev, apply, assert, check/rollback) -> debug mask ->
+#      proxy (record prev, versioned KVMs, Maven deploy with the runtime SA, wait, SA check) ->
+#      Newman -> check (on failure: roll back the proxy, then the integration, and stop)
+#   4. staging: the same, but the proxy revision that passed dev is PROMOTED (deploy-revision.sh,
+#      no new import); a staging failure rolls back staging only
+#   5. summary
+# Failure pattern (as cicd-workspace): a test/apply step never fails itself, it writes a flag file
+# in /workspace; the next check step rolls back and exits 1, so nothing after it runs.
+# A hard failure of any other step stops the build where it is (no automatic rollback).
+# Shell variables and command substitutions are written $$VAR / $$(...) (Cloud Build escaping).
+
+steps:
+  # ---------------------------------------------------------------- build checks (unstamped)
+  - id: install
+    name: node:22
+    entrypoint: npm
+    args: ['ci']
+
+  - id: lint
+    name: node:22
+    entrypoint: npm
+    args: ['run', 'lint']
+
+  - id: unit-tests
+    name: node:22
+    entrypoint: npm
+    args: ['run', 'test:unit']
+
+  # ---------------------------------------------------------------- stamp + token
+  - id: stamp-commit
+    name: node:22
+    entrypoint: bash
+    args: ['scripts/stamp-commit.sh', '${SHORT_SHA}', '${BUILD_ID}']
+
+  # Short-lived token for steps whose image has no gcloud (node, maven); never printed.
+  - id: token
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['-c', 'gcloud auth print-access-token > /workspace/.token']
+
+  - id: install-integrationcli
+    name: node:22
+    entrypoint: bash
+    args: ['scripts/install-integrationcli.sh', '0.86.0', '/workspace/bin']
+
+  # ================================================================ dev
+  # Expand-only migrations + seed (rule 9); never rolled back.
+  - id: db-load-dev
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['db/load.sh', 'dev']
+
+  # Fails closed (I-3): a read error stops the build before anything is applied.
+  - id: record-prev-int-dev
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['scripts/get-published-integration-version.sh', '${_ORG}', '${_REGION}', 'sar-kpi-get-dev', 'prev_int_dev.txt']
+
+  - id: apply-int-dev
+    name: node:22
+    entrypoint: bash
+    env: ['SHORT_SHA=${SHORT_SHA}']
+    args:
+      - -c
+      - |
+        bash scripts/apply-integration.sh dev || { echo "Integration apply failed on dev!" >&2; touch /workspace/int_dev_failed; }
+
+  # Post-apply assertion; on success new_int_dev.txt holds the ACTIVE version id.
+  - id: assert-int-dev
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ -f /workspace/int_dev_failed ]; then echo "Skipped: apply failed."; exit 0; fi
+        bash scripts/assert-integration.sh dev ${SHORT_SHA} new_int_dev.txt || { echo "Integration assertion failed on dev!" >&2; touch /workspace/int_dev_failed; }
+
+  - id: check-int-dev
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ -f /workspace/int_dev_failed ]; then
+          echo "Integration apply/assert failed on dev! Rolling back the integration..."
+          bash scripts/get-published-integration-version.sh ${_ORG} ${_REGION} sar-kpi-get-dev failed_int_dev.txt || true
+          PREV="$$(cat prev_int_dev.txt 2>/dev/null || true)"
+          FAILED="$$(cat failed_int_dev.txt 2>/dev/null || true)"
+          if [ -n "$$FAILED" ] && [ "$$FAILED" = "$$PREV" ]; then
+            echo "No new version is ACTIVE (still $$PREV): nothing to roll back."
+          else
+            bash scripts/rollback-integration.sh ${_ORG} ${_REGION} sar-kpi-get-dev "$$PREV" "$$FAILED" || echo "Integration rollback FAILED: manual intervention required." >&2
+            bash scripts/get-published-integration-version.sh ${_ORG} ${_REGION} sar-kpi-get-dev int_dev_after_rollback.txt || true
+          fi
+          echo "Pipeline halted: the dev integration failed; dev proxy and staging were not touched." >&2
+          exit 1
+        fi
+        echo "Dev integration $$(cat new_int_dev.txt) is ACTIVE with label ${SHORT_SHA}."
+
+  # Refresh the token: the integration apply and its tests can take a while.
+  - id: token-proxy-dev
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['-c', 'gcloud auth print-access-token > /workspace/.token']
+
+  - id: debugmask-dev
+    name: node:22
+    entrypoint: bash
+    args: ['scripts/deploy-debugmask.sh', 'dev']
+
+  - id: record-prev-dev
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['scripts/get-deployed-revision.sh', '${_ORG}', 'dev', '${_PROXY}', 'prev_dev_revision.txt']
+
+  - id: create-kvm-dev
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['scripts/create-versioned-kvm.sh', '${_ORG}', 'dev', '${SHORT_SHA}']
+
+  # Imports the stamped bundle and deploys it with sa-kpi-proxy-runtime (apigee.googletoken.email, D16).
+  - id: deploy-dev
+    name: maven:3.9.9-eclipse-temurin-17
+    entrypoint: bash
+    args: ['-c', 'mvn -B -f src/main/apigee/apiproxies/${_PROXY}/pom.xml clean install -Pdev "-Dbearer=$$(cat /workspace/.token)"']
+
+  # Writes dev_revision.txt.
+  - id: wait-dev
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['scripts/wait-for-deployment.sh', '${_ORG}', 'dev', '${_PROXY}', '600']
+
+  - id: verify-sa-dev
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['-c', 'bash scripts/assert-proxy-runtime-sa.sh ${_ORG} dev ${_PROXY} "$$(cat dev_revision.txt)"']
+
+  - id: test-dev
+    name: node:22
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        bash tests/run-newman.sh dev || { echo "Dev tests failed!" >&2; touch /workspace/dev_test_failed; }
+
+  # Rollback order: proxy first, then integration (the old proxy works with the old integration).
+  - id: check-dev-test
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ -f /workspace/dev_test_failed ]; then
+          echo "Post-deploy tests failed on dev! Rolling back the proxy, then the integration..."
+          bash scripts/rollback.sh ${_ORG} dev ${_PROXY} "$$(cat prev_dev_revision.txt)" "$$(cat dev_revision.txt)" || echo "Proxy rollback FAILED: manual intervention required." >&2
+          bash scripts/rollback-integration.sh ${_ORG} ${_REGION} sar-kpi-get-dev "$$(cat prev_int_dev.txt)" "$$(cat new_int_dev.txt)" || echo "Integration rollback FAILED: manual intervention required." >&2
+          # The restored integration version gets a new id (D29).
+          bash scripts/get-published-integration-version.sh ${_ORG} ${_REGION} sar-kpi-get-dev int_dev_after_rollback.txt || true
+          echo "Pipeline halted: dev tests failed and dev was rolled back; staging was not touched." >&2
+          exit 1
+        fi
+        echo "Dev tests passed."
+
+  # ================================================================ staging
+  # Fresh token: the dev half can take a large part of the token lifetime (about 1 h).
+  - id: token-staging
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['-c', 'gcloud auth print-access-token > /workspace/.token']
+
+  - id: db-load-staging
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['db/load.sh', 'staging']
+
+  - id: record-prev-int-staging
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['scripts/get-published-integration-version.sh', '${_ORG}', '${_REGION}', 'sar-kpi-get-staging', 'prev_int_staging.txt']
+
+  - id: apply-int-staging
+    name: node:22
+    entrypoint: bash
+    env: ['SHORT_SHA=${SHORT_SHA}']
+    args:
+      - -c
+      - |
+        bash scripts/apply-integration.sh staging || { echo "Integration apply failed on staging!" >&2; touch /workspace/int_staging_failed; }
+
+  - id: assert-int-staging
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ -f /workspace/int_staging_failed ]; then echo "Skipped: apply failed."; exit 0; fi
+        bash scripts/assert-integration.sh staging ${SHORT_SHA} new_int_staging.txt || { echo "Integration assertion failed on staging!" >&2; touch /workspace/int_staging_failed; }
+
+  - id: check-int-staging
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ -f /workspace/int_staging_failed ]; then
+          echo "Integration apply/assert failed on staging! Rolling back the staging integration..."
+          bash scripts/get-published-integration-version.sh ${_ORG} ${_REGION} sar-kpi-get-staging failed_int_staging.txt || true
+          PREV="$$(cat prev_int_staging.txt 2>/dev/null || true)"
+          FAILED="$$(cat failed_int_staging.txt 2>/dev/null || true)"
+          if [ -n "$$FAILED" ] && [ "$$FAILED" = "$$PREV" ]; then
+            echo "No new version is ACTIVE (still $$PREV): nothing to roll back."
+          else
+            bash scripts/rollback-integration.sh ${_ORG} ${_REGION} sar-kpi-get-staging "$$PREV" "$$FAILED" || echo "Integration rollback FAILED: manual intervention required." >&2
+            bash scripts/get-published-integration-version.sh ${_ORG} ${_REGION} sar-kpi-get-staging int_staging_after_rollback.txt || true
+          fi
+          echo "Pipeline halted: the staging integration failed; the staging proxy was not touched (dev keeps this commit)." >&2
+          exit 1
+        fi
+        echo "Staging integration $$(cat new_int_staging.txt) is ACTIVE with label ${SHORT_SHA}."
+
+  # Refresh the token before the staging proxy phase.
+  - id: token-proxy-staging
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['-c', 'gcloud auth print-access-token > /workspace/.token']
+
+  - id: debugmask-staging
+    name: node:22
+    entrypoint: bash
+    args: ['scripts/deploy-debugmask.sh', 'staging']
+
+  - id: record-prev-staging
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['scripts/get-deployed-revision.sh', '${_ORG}', 'staging', '${_PROXY}', 'prev_staging_revision.txt']
+
+  - id: create-kvm-staging
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['scripts/create-versioned-kvm.sh', '${_ORG}', 'staging', '${SHORT_SHA}']
+
+  # Same revision that passed dev; no new import. deploy-revision.sh attaches sa-kpi-proxy-runtime.
+  - id: promote-staging
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['-c', 'bash scripts/deploy-revision.sh ${_ORG} staging ${_PROXY} "$$(cat dev_revision.txt)"']
+
+  # Writes staging_revision.txt; waits for exactly the promoted revision.
+  - id: wait-staging
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['-c', 'bash scripts/wait-for-deployment.sh ${_ORG} staging ${_PROXY} 600 "$$(cat dev_revision.txt)"']
+
+  - id: verify-sa-staging
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ['-c', 'bash scripts/assert-proxy-runtime-sa.sh ${_ORG} staging ${_PROXY} "$$(cat staging_revision.txt)"']
+
+  - id: test-staging
+    name: node:22
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        bash tests/run-newman.sh staging || { echo "Staging tests failed!" >&2; touch /workspace/staging_test_failed; }
+
+  - id: check-staging-test
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ -f /workspace/staging_test_failed ]; then
+          echo "Post-deploy tests failed on staging! Rolling back the staging proxy, then the staging integration..."
+          bash scripts/rollback.sh ${_ORG} staging ${_PROXY} "$$(cat prev_staging_revision.txt)" "$$(cat staging_revision.txt)" || echo "Proxy rollback FAILED: manual intervention required." >&2
+          bash scripts/rollback-integration.sh ${_ORG} ${_REGION} sar-kpi-get-staging "$$(cat prev_int_staging.txt)" "$$(cat new_int_staging.txt)" || echo "Integration rollback FAILED: manual intervention required." >&2
+          bash scripts/get-published-integration-version.sh ${_ORG} ${_REGION} sar-kpi-get-staging int_staging_after_rollback.txt || true
+          echo "Pipeline halted: staging tests failed and staging was rolled back (dev keeps this commit)." >&2
+          exit 1
+        fi
+        echo "Staging tests passed."
+
+  # ================================================================ summary
+  - id: summary
+    name: node:22
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        echo "commit:               ${COMMIT_SHA}"
+        echo "build:                ${BUILD_ID}"
+        echo "kvm version / label:  ${SHORT_SHA}"
+        echo "dev integration:      sar-kpi-get-dev $$(cat new_int_dev.txt) (before: $$(cat prev_int_dev.txt))"
+        echo "staging integration:  sar-kpi-get-staging $$(cat new_int_staging.txt) (before: $$(cat prev_int_staging.txt))"
+        echo "dev revision:         ${_PROXY} $$(cat dev_revision.txt) (before: $$(cat prev_dev_revision.txt))"
+        echo "staging revision:     ${_PROXY} $$(cat staging_revision.txt) (before: $$(cat prev_staging_revision.txt))"
+
+substitutions:
+  _ORG: apigee-nonprod-511322
+  _PROXY: sar-mot-kpis-v1
+  _REGION: us-central1
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 5400s

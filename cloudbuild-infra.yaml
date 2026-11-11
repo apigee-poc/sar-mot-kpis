@@ -1,0 +1,76 @@
+# Foundation pipeline (Cloud Build, project ci-cd-511313). MANUAL trigger only, with approval
+# (it can create billable resources: Cloud SQL, PSC endpoint attachment). Never runs on push.
+# Service account: cb-deploy-nonprod (set on the trigger).
+# Runs infra/01..05 in order for _TARGET with infra/env/<_TARGET>.env. Only _TARGET=nonprod is
+# accepted here: the prod foundation runs via the approved prod trigger in P8.
+# Each script is printed before it runs (they hold no secrets; credentials go to Secret Manager).
+# infra/02 exits 3 when the Application Integration service agent is missing (Quick setup, D28,
+# D50): the build stops there, fix it and re-run (every script is idempotent).
+
+steps:
+  - id: guard-target
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ "${_TARGET}" != "nonprod" ]; then
+          echo "Refusing _TARGET='${_TARGET}': this pipeline runs the nonprod foundation only; the prod foundation is run via the approved prod trigger in P8." >&2
+          exit 1
+        fi
+        test -f "infra/env/${_TARGET}.env" || { echo "infra/env/${_TARGET}.env not found" >&2; exit 1; }
+        echo "Target: ${_TARGET} (infra/env/${_TARGET}.env)"
+        cat "infra/env/${_TARGET}.env"
+
+  - id: infra-01-enable-apis
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        echo "===== infra/01-enable-apis.sh ====="; cat infra/01-enable-apis.sh
+        bash infra/01-enable-apis.sh "infra/env/${_TARGET}.env"
+
+  - id: infra-02-service-accounts-iam
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        echo "===== infra/02-service-accounts-iam.sh ====="; cat infra/02-service-accounts-iam.sh
+        bash infra/02-service-accounts-iam.sh "infra/env/${_TARGET}.env"
+
+  - id: infra-03-cloudsql-private
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        echo "===== infra/03-cloudsql-private.sh ====="; cat infra/03-cloudsql-private.sh
+        bash infra/03-cloudsql-private.sh "infra/env/${_TARGET}.env"
+
+  - id: infra-04-psc-endpoint-attachment
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        echo "===== infra/04-psc-endpoint-attachment.sh ====="; cat infra/04-psc-endpoint-attachment.sh
+        bash infra/04-psc-endpoint-attachment.sh "infra/env/${_TARGET}.env"
+
+  - id: infra-05-apigee-products-apps
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        echo "===== infra/05-apigee-products-apps.sh ====="; cat infra/05-apigee-products-apps.sh
+        bash infra/05-apigee-products-apps.sh "infra/env/${_TARGET}.env"
+
+substitutions:
+  _TARGET: nonprod
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 3600s

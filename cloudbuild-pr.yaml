@@ -1,0 +1,49 @@
+# PR validation pipeline (Cloud Build, project ci-cd-511313).
+# Trigger: pull requests to main. Service account: cb-validate (set on the trigger; no Apigee,
+# Integration, Cloud SQL or Secret Manager access). Nothing is deployed and nothing is stamped.
+# Gates: npm ci -> apigeelint (0 errors, 0 warnings) -> unit tests -> OAS lint -> Postman
+# collection up to date -> Maven package.
+# Integration JSON validation (integration/<env>/src, overrides, tests, test-configs) is covered by
+# the unit tests (tests/unit/integration-sar-kpi-get.test.js), so there is no separate step.
+
+steps:
+  - id: install
+    name: node:22
+    entrypoint: npm
+    args: ['ci']
+
+  # apigeelint with --maxWarnings 0 (package.json "lint")
+  - id: lint
+    name: node:22
+    entrypoint: npm
+    args: ['run', 'lint']
+
+  - id: unit-tests
+    name: node:22
+    entrypoint: npm
+    args: ['run', 'test:unit']
+
+  # @redocly/cli is not a devDependency (adding it needs the registry); pinned exact version via npx.
+  - id: oas-lint
+    name: node:22
+    entrypoint: npx
+    args: ['--yes', '@redocly/cli@1.34.24', 'lint', 'api/sar-mot-kpis-oas.yaml']
+
+  # The committed collection must equal the generator output (D44).
+  - id: collection-check
+    name: node:22
+    entrypoint: node
+    args: ['tests/tools/build-collection.js', '--check']
+
+  - id: package
+    name: maven:3.9.9-eclipse-temurin-17
+    entrypoint: mvn
+    args: ['-B', '-f', 'src/main/apigee/apiproxies/${_PROXY}/pom.xml', 'clean', 'package', '-Pdev']
+
+substitutions:
+  _PROXY: sar-mot-kpis-v1
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1200s
