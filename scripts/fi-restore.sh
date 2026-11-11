@@ -34,7 +34,31 @@ if [[ ! "${BASELINE}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-echo "Restoring ${PROXY} revision ${BASELINE} in ${ENV_NAME}"
+# The baseline is only honoured while dev is on it or on one of our scratch revisions; otherwise
+# someone else deployed dev since and restoring would roll it back silently.
+LIVE_NOW="$(bash scripts/get-deployed-revision.sh "${ORG}" "${ENV_NAME}" "${PROXY}" | tr -d '\r\n[:space:]')"
+if [[ ! "${LIVE_NOW}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: could not read the deployed revision of ${PROXY} in ${ENV_NAME}." >&2
+  exit 1
+fi
+if [[ "${LIVE_NOW}" != "${BASELINE}" ]] \
+   && ! grep -Eqs "(^| )revision=${LIVE_NOW}( |$)" "${STATE_DIR}/history.log"; then
+  echo "Refusing: stale ${STATE_DIR}: dev is on revision ${LIVE_NOW}, which is neither the baseline ${BASELINE} nor a scratch revision in ${STATE_DIR}/history.log." >&2
+  echo "Someone else deployed dev since. Check it, then remove ${BASELINE_FILE} by hand." >&2
+  exit 1
+fi
+
+on_exit() {
+  local rc=$?
+  if [[ "${rc}" != "0" ]]; then
+    echo "fi-restore failed: dev may still be on a scratch revision - fix the cause and re-run bash scripts/fi-restore.sh (.fi-state is kept)." >&2
+  fi
+  exit "${rc}"
+}
+trap on_exit EXIT
+trap 'exit 130' INT TERM
+
+echo "Restoring ${PROXY} revision ${BASELINE} in ${ENV_NAME} (live now: ${LIVE_NOW})"
 bash scripts/deploy-revision.sh "${ORG}" "${ENV_NAME}" "${PROXY}" "${BASELINE}"
 (cd "${STATE_DIR}" && bash ../scripts/wait-for-deployment.sh "${ORG}" "${ENV_NAME}" "${PROXY}" 600 "${BASELINE}")
 

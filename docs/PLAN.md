@@ -12,7 +12,7 @@ Agents update the status line of a phase when they start or finish it.
 | P3 | Integration Connector (private) | DONE (8987442) |
 | P4 | Application Integration | DONE (3400476) |
 | P5 | Apigee proxy | DONE (80ad235) |
-| P6 | Tests (unit, Newman, integration tests) | TODO |
+| P6 | Tests (unit, Newman, integration tests) | IN REVIEW |
 | P7 | CI/CD pipelines (PR + non-prod) | TODO |
 | P8 | Prod foundation + prod pipeline | TODO |
 | P9 | Documentation + acceptance demo | TODO |
@@ -321,6 +321,19 @@ P6 acceptance, using the fault-injection recipes in D39. The Newman suite is P6.
 
 **Acceptance:** the suite is green on dev, and the D39 fault-injection runs produce rows 6, 7, 13,
 14, 15 and 16 (or a row is explicitly waived with a reason).
+
+**Result (2026-11-12):** met with a waiver.
+- Full suite green on dev revision 7: 24 requests, 260 assertions, 0 failures, before and after
+  the fault-injection runs.
+- Rows 6, 7, 13 and 16 verified on dev with scratch revisions 8-11 (`scripts/fi-deploy.sh`,
+  folders `FI-06`/`FI-07`/`FI-13`/`FI-16`), then restored to revision 7 with
+  `scripts/fi-restore.sh` (D45, D46).
+- Rows 14 and 15 waived with reasons (D44); their logic is covered by unit tests.
+- [x] Row 13 records the IntegrationEndpoint fault and path (V3/V9): an Apigee fault
+  `BadGateway` ("Received non success response code") in the target response flow (D46).
+- Prod smoke subset (`--folder "Happy paths"`) is a P8 pipeline decision; the smoke folder
+  asserts exact mock values, so `kpis_prod` needs the same seed or prod needs its own subset
+  (D47).
 
 ---
 

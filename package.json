@@ -10,10 +10,8 @@
   "scripts": {
     "lint": "apigeelint -s src/main/apigee/apiproxies/sar-mot-kpis-v1/apiproxy -f table.js --profile apigeex --maxWarnings 0",
     "test:unit": "mocha tests/unit",
-    "test:local": "newman run tests/sar-mot-kpis.postman_collection.json -e tests/environments/local.postman_environment.json --reporters cli,junit --reporter-junit-export reports/newman-local.xml",
-    "test:dev": "newman run tests/sar-mot-kpis.postman_collection.json -e tests/environments/dev.postman_environment.json --reporters cli,junit --reporter-junit-export reports/newman-dev.xml",
-    "test:staging": "newman run tests/sar-mot-kpis.postman_collection.json -e tests/environments/staging.postman_environment.json --reporters cli,junit --reporter-junit-export reports/newman-staging.xml",
-    "test:prod": "newman run tests/sar-mot-kpis.postman_collection.json -e tests/environments/prod.postman_environment.json --reporters cli,junit --reporter-junit-export reports/newman-prod.xml",
+    "test:dev": "bash tests/run-newman.sh dev",
+    "test:staging": "bash tests/run-newman.sh staging",
     "package": "mvn -f src/main/apigee/apiproxies/sar-mot-kpis-v1/pom.xml clean package -Pdev"
   },
   "repository": {

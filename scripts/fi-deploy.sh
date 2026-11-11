@@ -6,7 +6,9 @@
 # Org and environment are fixed (apigee-nonprod-511322 / dev); nothing else can be targeted.
 # Steps:
 #   1. Record the currently deployed (normal) revision in .fi-state/baseline-revision, only if no
-#      baseline is recorded yet, so repeated scenarios keep the original baseline.
+#      baseline is recorded yet, so repeated scenarios keep the original baseline. A kept
+#      baseline is refused (stale state) unless dev is on it or on a scratch revision listed in
+#      .fi-state/history.log.
 #   2. Create fresh versioned KVMs sar-mot-kpis-{config,errors}-<scenario>-<sha>-<epoch minutes>
 #      with the normal dev values (KVM values are cached 300 s, so every run uses a new name),
 #      then override exactly ONE config entry:
@@ -17,10 +19,12 @@
 #        fi16b quotaTimeUnit=fortnight              row 16 fallback if fi16 returns 200
 #   3. Stamp __KVM_VERSION__ in the proxy bundle with that suffix, deploy with Maven (-Pdev),
 #      and always revert the stamp (git checkout), even on failure.
-#   4. Wait for READY, check the new revision is live, then wait for propagation.
-# Restore the baseline with: bash scripts/fi-restore.sh
-# Nothing is deleted: scratch KVMs and revisions are listed in .fi-state/history.log for manual
-# cleanup (AGENTS.md rule 3). The access token is never printed.
+#   4. Wait for READY, check the new revision is newer than the one live at the start of this
+#      run, then wait for propagation.
+# Restore the baseline with: bash scripts/fi-restore.sh (the script says so after any failure).
+# Nothing is deleted: scratch KVM names (before they are created) and revisions (once READY) are
+# appended to .fi-state/history.log for manual cleanup (AGENTS.md rule 3). The access token is
+# never printed (it is visible in the local process list while curl/Maven run: accepted, D45).
 set -euo pipefail
 set +x
 
@@ -70,26 +74,57 @@ if ! grep -rqs "__KVM_VERSION__" "${BUNDLE}"; then
 fi
 
 mkdir -p "${STATE_DIR}"
+readonly HISTORY="${STATE_DIR}/history.log"
 
-# 1. Baseline (only once).
+# One EXIT handler: reverts the stamp (if stamped), removes the temp dir, and after a failure
+# tells the user how to get dev back (covers failing commands and explicit exits alike).
+STAMPED=0
+HINT=0
+WORK=""
+on_exit() {
+  local rc=$?
+  if [[ "${STAMPED}" == "1" ]]; then
+    git checkout -- "${PROXY_DIR}" || echo "WARNING: could not revert ${PROXY_DIR}; run: git checkout -- ${PROXY_DIR}" >&2
+  fi
+  if [[ -n "${WORK}" ]]; then
+    rm -rf "${WORK}"
+  fi
+  if [[ "${rc}" != "0" && "${HINT}" == "1" ]]; then
+    echo "fi-deploy failed: dev may still be on a scratch revision - re-run bash scripts/fi-restore.sh (.fi-state is kept)." >&2
+  fi
+  exit "${rc}"
+}
+trap on_exit EXIT
+trap 'exit 130' INT TERM
+
+# 1. Revision live now, and the baseline (recorded only once).
+LIVE_AT_START="$(bash scripts/get-deployed-revision.sh "${ORG}" "${ENV_NAME}" "${PROXY}" | tr -d '
+[:space:]')"
+if [[ ! "${LIVE_AT_START}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: could not read the deployed revision of ${PROXY} in ${ENV_NAME}." >&2
+  exit 1
+fi
 if [[ -s "${BASELINE_FILE}" ]]; then
-  BASELINE="$(tr -d '\r\n[:space:]' < "${BASELINE_FILE}")"
-  echo "Baseline already recorded: revision ${BASELINE} (kept)"
-else
-  bash scripts/get-deployed-revision.sh "${ORG}" "${ENV_NAME}" "${PROXY}" "${STATE_DIR}/baseline.tmp"
-  BASELINE="$(tr -d '\r\n[:space:]' < "${STATE_DIR}/baseline.tmp")"
-  rm -f "${STATE_DIR}/baseline.tmp"
+  BASELINE="$(tr -d '
+[:space:]' < "${BASELINE_FILE}")"
   if [[ ! "${BASELINE}" =~ ^[0-9]+$ ]]; then
-    echo "ERROR: could not read the deployed revision of ${PROXY} in ${ENV_NAME}; no baseline recorded." >&2
+    echo "ERROR: invalid baseline in ${BASELINE_FILE}" >&2
     exit 1
   fi
+  # A kept baseline is only valid while dev is on it or on a scratch revision of ours. Anything
+  # else (e.g. a pipeline deployed dev since) would make fi-restore roll dev back silently.
+  if [[ "${LIVE_AT_START}" != "${BASELINE}" ]]      && ! grep -Eqs "(^| )revision=${LIVE_AT_START}( |$)" "${HISTORY}"; then
+    echo "Refusing: stale ${STATE_DIR}: dev is on revision ${LIVE_AT_START}, which is neither the baseline ${BASELINE} nor a scratch revision in ${HISTORY}." >&2
+    echo "Someone else deployed dev since. Check it, then remove ${BASELINE_FILE} and re-run." >&2
+    exit 1
+  fi
+  echo "Baseline already recorded: revision ${BASELINE} (kept; live now: ${LIVE_AT_START})"
+else
+  BASELINE="${LIVE_AT_START}"
   echo "${BASELINE}" > "${BASELINE_FILE}"
   echo "Baseline recorded: revision ${BASELINE}"
 fi
-if [[ ! "${BASELINE}" =~ ^[0-9]+$ ]]; then
-  echo "ERROR: invalid baseline in ${BASELINE_FILE}" >&2
-  exit 1
-fi
+HINT=1
 
 # 2. Fresh versioned KVMs, then one override.
 SHORT_SHA="$(git rev-parse --short=7 HEAD)"
@@ -97,28 +132,21 @@ SUFFIX="${SCENARIO}-${SHORT_SHA}-$(( $(date +%s) / 60 ))"
 CONFIG_MAP="sar-mot-kpis-config-${SUFFIX}"
 echo "Scenario ${SCENARIO}: KVM suffix ${SUFFIX}, override ${KEY}=${VALUE}"
 
+# Inventory first, so a failure halfway still leaves the names for manual cleanup.
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ${SCENARIO} kvms=sar-mot-kpis-config-${SUFFIX},sar-mot-kpis-errors-${SUFFIX} override=${KEY}=${VALUE}"   >> "${HISTORY}"
 bash scripts/create-versioned-kvm.sh "${ORG}" "${ENV_NAME}" "${SUFFIX}"
 
-TOKEN="$(gcloud auth print-access-token --quiet 2>/dev/null | tr -d '\r\n[:space:]')"
+TOKEN="$(gcloud auth print-access-token --quiet 2>/dev/null | tr -d '
+[:space:]')"
 if [[ -z "${TOKEN}" ]]; then
   echo "ERROR: no access token from gcloud" >&2
   exit 1
 fi
 
 WORK="$(mktemp -d)"
-cleanup() {
-  git checkout -- "${PROXY_DIR}" || echo "WARNING: could not revert ${PROXY_DIR}; run: git checkout -- ${PROXY_DIR}" >&2
-  rm -rf "${WORK}"
-}
-trap cleanup EXIT
-trap 'exit 130' INT TERM
 
 API="https://apigee.googleapis.com/v1/organizations/${ORG}/environments/${ENV_NAME}/keyvaluemaps"
-HTTP_CODE="$(curl -sS -o "${WORK}/put.json" -w "%{http_code}" -X PUT \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  --data "{\"name\":\"${KEY}\",\"value\":\"${VALUE}\"}" \
-  "${API}/${CONFIG_MAP}/entries/${KEY}")"
+HTTP_CODE="$(curl -sS -o "${WORK}/put.json" -w "%{http_code}" -X PUT   -H "Authorization: Bearer ${TOKEN}"   -H "Content-Type: application/json"   --data "{\"name\":\"${KEY}\",\"value\":\"${VALUE}\"}"   "${API}/${CONFIG_MAP}/entries/${KEY}")"
 if [[ ! "${HTTP_CODE}" =~ ^20[01]$ ]]; then
   echo "ERROR: override of ${CONFIG_MAP}/${KEY} failed (HTTP ${HTTP_CODE}):" >&2
   cat "${WORK}/put.json" >&2 || true
@@ -126,7 +154,8 @@ if [[ ! "${HTTP_CODE}" =~ ^20[01]$ ]]; then
 fi
 echo "Override set: ${CONFIG_MAP}/${KEY}=${VALUE}"
 
-# 3. Stamp (reverted by the EXIT trap), deploy.
+# 3. Stamp (reverted by the EXIT handler), deploy.
+STAMPED=1
 grep -rl "__KVM_VERSION__" "${BUNDLE}" | while IFS= read -r f; do
   sed -i "s/__KVM_VERSION__/${SUFFIX}/g" "${f}"
 done
@@ -144,19 +173,22 @@ echo "Deploying ${PROXY} to ${ENV_NAME} with Maven (token not shown)"
 # Output filtered so the token can never appear in the log.
 mvn -B -q -f "${POM}" clean install -Pdev -Dbearer="${TOKEN}" 2>&1 | sed "s/${TOKEN}/***TOKEN***/g"
 
-# Revert the stamp now (the trap does it again harmlessly).
+# Revert the stamp now (the EXIT handler does it again harmlessly).
 git checkout -- "${PROXY_DIR}"
 
 # 4. READY, live check, propagation. wait-for-deployment writes <env>_revision.txt in the cwd.
 (cd "${STATE_DIR}" && bash ../scripts/wait-for-deployment.sh "${ORG}" "${ENV_NAME}" "${PROXY}" 600)
-NEW_REV="$(cd "${STATE_DIR}" && tr -d '\r\n[:space:]' < "${ENV_NAME}_revision.txt")"
-if [[ ! "${NEW_REV}" =~ ^[0-9]+$ ]] || (( NEW_REV <= BASELINE )); then
-  echo "ERROR: deployed revision '${NEW_REV}' is not newer than the baseline ${BASELINE}" >&2
+NEW_REV="$(cd "${STATE_DIR}" && tr -d '
+[:space:]' < "${ENV_NAME}_revision.txt")"
+if [[ "${NEW_REV}" =~ ^[0-9]+$ ]]; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ${SCENARIO} revision=${NEW_REV} kvms=sar-mot-kpis-config-${SUFFIX},sar-mot-kpis-errors-${SUFFIX}"     >> "${HISTORY}"
+fi
+# Must be newer than what was live when this run started (not only the baseline: after an
+# earlier scenario a scratch revision is live, and a deploy that made no new revision must fail).
+if [[ ! "${NEW_REV}" =~ ^[0-9]+$ ]] || (( NEW_REV <= LIVE_AT_START )); then
+  echo "ERROR: deployed revision '${NEW_REV}' is not newer than revision ${LIVE_AT_START}, live at the start of this run" >&2
   exit 1
 fi
-
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ${SCENARIO} revision=${NEW_REV} kvms=sar-mot-kpis-config-${SUFFIX},sar-mot-kpis-errors-${SUFFIX} override=${KEY}=${VALUE}" \
-  >> "${STATE_DIR}/history.log"
 echo "${SCENARIO}" > "${STATE_DIR}/last-scenario"
 
 echo "Revision ${NEW_REV} is READY; waiting ${PROPAGATION_SECONDS}s for propagation (and an empty rate window)"

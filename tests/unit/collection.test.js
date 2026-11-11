@@ -312,16 +312,88 @@ describe('Postman environments (tests/environments)', () => {
       SECRET_VARS.forEach((k) => {
         expect(vars[k], `${env}: ${k}`).to.include({ type: 'secret', value: '' });
       });
-      data.values.filter((v) => !['baseUrl', 'basePath', 'operatorId', 'folderFilter'].includes(v.key)).forEach((v) => {
+      expect(data.values.map((v) => v.key).sort()).to.deep.equal(
+        ['apiKey', 'apiSecret', 'basePath', 'baseUrl', 'faultScenario', 'operatorId', 'otherApiKey', 'otherApiSecret']
+      );
+      data.values.filter((v) => !['baseUrl', 'basePath', 'operatorId'].includes(v.key)).forEach((v) => {
         expect(v.value, `${env}: ${v.key}`).to.equal('');
       });
       expect(read(file)).to.not.match(/[0-9a-fA-F]{32,}|[A-Za-z0-9+/]{32,}={0,2}/);
     });
   });
 
-  it('prod limits itself to the read-only smoke folder', () => {
-    const data = JSON.parse(read(path.join(ENV_DIR, 'prod.postman_environment.json')));
-    const filter = data.values.find((v) => v.key === 'folderFilter');
-    expect(filter.value).to.equal(gen.FOLDERS.happy);
+  // The prod smoke subset (--folder "Happy paths") is a P8 pipeline decision (D47). Newman never
+  // reads a "folder filter" variable, so none is kept in the environment files.
+  it('no environment pretends to restrict folders (no folderFilter variable)', () => {
+    Object.keys(ENV_HOSTS).forEach((env) => {
+      expect(read(path.join(ENV_DIR, `${env}.postman_environment.json`)), env).to.not.include('folderFilter');
+    });
+  });
+});
+
+// Mock data: the happy-path expectations must equal the OAS examples and the seed rows
+// (db/seed/total_freight.sql), so a change in either breaks this test, not a dev run.
+describe('happy-path data vs the OAS examples and the seed SQL', () => {
+  const happy = {};
+  collection.item.find((f) => f.name === gen.FOLDERS.happy).item.forEach((item) => {
+    const q = /[?&]year=(\d+)(?:&quarter=(\d+))?/.exec(item.request.url);
+    happy[q[2] ? `${q[1]}q${q[2]}` : q[1]] = expectedOf(item).data;
+  });
+
+  // Seed rows: ('total_freight', year, quarter, actual, 'loadTime').
+  function seedRows() {
+    const sql = read(path.join(ROOT, 'db', 'seed', 'total_freight.sql'));
+    const rows = [];
+    const re = /\('total_freight',\s*(\d{4}),\s*(\d),\s*([\d.]+),\s*'([^']+)'\)/g;
+    let m;
+    while ((m = re.exec(sql)) !== null) {
+      rows.push({ quarter: Number(m[2]), year: Number(m[1]), actual: Number(m[3]), loadTime: m[4] });
+    }
+    return rows;
+  }
+
+  // OAS response example `name` (under GET /kpis/total_freight): its `data` list.
+  function oasExampleData(name) {
+    const lines = read(OAS_FILE).split('\n');
+    const start = lines.findIndex((l) => l.trim() === `${name}:`);
+    expect(start, `OAS example ${name}`).to.be.above(-1);
+    const records = [];
+    for (let i = start + 1; i < lines.length; i += 1) {
+      const t = lines[i].trim();
+      if (/^[\w-]+:$/.test(t) && lines[i].search(/\S/) <= lines[start].search(/\S/)) break;
+      const m = /^(?:- )?(quarter|year|actual|loadTime): '?([^']*)'?$/.exec(t);
+      if (m) {
+        if (m[1] === 'quarter' && t.startsWith('- ')) records.push({});
+        records[records.length - 1][m[1]] = m[1] === 'loadTime' ? m[2] : Number(m[2]);
+      }
+    }
+    return records;
+  }
+
+  it('the collection has the four happy paths', () => {
+    expect(Object.keys(happy).sort()).to.deep.equal(['2024', '2025', '2025q3', '2026']);
+  });
+
+  it('year 2025 and quarter 3 equal the OAS examples full-year and single-quarter', () => {
+    expect(happy['2025']).to.deep.equal(oasExampleData('full-year'));
+    expect(happy['2025q3']).to.deep.equal(oasExampleData('single-quarter'));
+    expect(oasExampleData('full-year')).to.have.length(3);
+  });
+
+  it('every happy path equals the seed rows for its year/quarter (2026 has none)', () => {
+    const seed = seedRows();
+    expect(seed).to.have.length(7);
+    const pick = (year, quarter) => seed.filter((r) => r.year === year && (!quarter || r.quarter === quarter));
+    expect(happy['2025']).to.deep.equal(pick(2025));
+    expect(happy['2025q3']).to.deep.equal(pick(2025, 3));
+    expect(happy['2026']).to.deep.equal([]);
+    expect(pick(2026)).to.deep.equal([]);
+    expect(happy['2024']).to.deep.equal(pick(2024));
+  });
+
+  it('the fault-injection 200 steps expect the same 2025 data', () => {
+    gen.FAULT_INJECTION_REQUESTS.forEach((group) => group.requests.filter((r) => r.data).forEach((r) => {
+      expect(r.data, `${group.folder} ${r.name}`).to.deep.equal(happy['2025']);
+    }));
   });
 });
