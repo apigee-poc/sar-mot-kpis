@@ -154,7 +154,7 @@
       },
       "displayName": "data",
       "inputOutputType": "OUT",
-      "jsonSchema": "{\n  \"$schema\": \"http://json-schema.org/draft-04/schema#\",\n  \"type\": \"object\",\n  \"required\": [\n    \"records\"\n  ],\n  \"properties\": {\n    \"records\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"required\": [\n          \"quarter\",\n          \"year\",\n          \"actual\",\n          \"loadTime\"\n        ],\n        \"properties\": {\n          \"quarter\": {\n            \"type\": \"integer\"\n          },\n          \"year\": {\n            \"type\": \"integer\"\n          },\n          \"actual\": {\n            \"type\": \"number\"\n          },\n          \"loadTime\": {\n            \"type\": \"string\"\n          }\n        }\n      }\n    }\n  }\n}",
+      "jsonSchema": "{\n  \"$schema\": \"http://json-schema.org/draft-04/schema#\",\n  \"type\": \"object\",\n  \"required\": [\n    \"records\"\n  ],\n  \"properties\": {\n    \"records\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"required\": [\n          \"quarter\",\n          \"year\",\n          \"actual\",\n          \"loadTime\"\n        ],\n        \"properties\": {\n          \"quarter\": {\n            \"type\": \"number\"\n          },\n          \"year\": {\n            \"type\": \"number\"\n          },\n          \"actual\": {\n            \"type\": \"number\"\n          },\n          \"loadTime\": {\n            \"type\": \"string\"\n          }\n        }\n      }\n    }\n  }\n}",
       "description": "Object {records: KpiRecord[]} (OAS records); {records: []} when there are no rows."
     },
     {

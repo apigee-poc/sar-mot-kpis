@@ -46,10 +46,46 @@ function runScript(script, params) {
 // Runs JS-TransformOutput and returns the object it set on `data` ({records: [...]}).
 function transformData(script, params) {
   const data = runScript(script, params).data;
+  expect(validateAsRuntime(data, dataSchema), 'data must pass the src data jsonSchema as the runtime checks it')
+    .to.deep.equal([]);
   expect(data, 'data must be a plain object').to.be.an('object');
   expect(Object.keys(data)).to.deep.equal(['records']);
   expect(data.records).to.be.an('array');
   return data;
+}
+
+// Minimal JSON-schema check that mimics the Application Integration runtime: values set from
+// JavaScript arrive as doubles, so "integer" never matches ("number found, integer expected",
+// seen in dev, D27). Returns a list of error messages.
+function validateAsRuntime(value, schema, at = '$') {
+  const errors = [];
+  const type = schema.type;
+  const actual = Array.isArray(value) ? 'array' : (value === null ? 'null' : typeof value);
+  if (type === 'integer') {
+    errors.push(`${at}: number found, integer expected`);
+  } else if (type && type !== actual) {
+    errors.push(`${at}: ${actual} found, ${type} expected`);
+  }
+  if (actual === 'object' && schema.properties) {
+    (schema.required || []).forEach((k) => {
+      if (!(k in value)) errors.push(`${at}.${k}: required`);
+    });
+    Object.keys(schema.properties).forEach((k) => {
+      if (k in value) errors.push(...validateAsRuntime(value[k], schema.properties[k], `${at}.${k}`));
+    });
+  }
+  if (actual === 'array' && schema.items) {
+    value.forEach((v, i) => errors.push(...validateAsRuntime(v, schema.items, `${at}[${i}]`)));
+  }
+  return errors;
+}
+
+function findIntegerTypes(schema, at = '$') {
+  if (!schema || typeof schema !== 'object') return [];
+  const found = schema.type === 'integer' || (Array.isArray(schema.type) && schema.type.includes('integer'))
+    ? [at] : [];
+  Object.keys(schema).forEach((k) => found.push(...findIntegerTypes(schema[k], `${at}.${k}`)));
+  return found;
 }
 
 function transform(script, params) {
@@ -59,6 +95,7 @@ function transform(script, params) {
 const integration = readJson(srcFile('dev'));
 const buildScript = task(integration, '1').parameters.script.value.stringValue;
 const transformScript = task(integration, '3').parameters.script.value.stringValue;
+const dataSchema = JSON.parse(integration.integrationParameters.find((p) => p.key === 'data').jsonSchema);
 
 describe('integration sar-kpi-get: structure', () => {
   it('dev and staging src files are identical except the env connection and trigger', () => {
@@ -108,6 +145,16 @@ describe('integration sar-kpi-get: structure', () => {
         parameters: { connectionName: `sar-kpi-db-${env}` }
       }]);
       expect(o.trigger_overrides[0].apiPath).to.equal(`sar-kpi-get-${env}`);
+    });
+  });
+
+  it('no integration variable jsonSchema uses "integer" (runtime sees JS numbers as doubles)', () => {
+    ENVS.forEach((env) => {
+      readJson(srcFile(env)).integrationParameters
+        .filter((p) => p.jsonSchema)
+        .forEach((p) => {
+          expect(findIntegerTypes(JSON.parse(p.jsonSchema)), `${env} ${p.key}`).to.deep.equal([]);
+        });
     });
   });
 
@@ -164,6 +211,13 @@ describe('integration sar-kpi-get: JS-BuildConnectorInput (task 1)', () => {
 
 describe('integration sar-kpi-get: JS-TransformOutput (task 3)', () => {
   const key = '`Task_2_connectorOutputPayload`';
+
+  it('runtime-style schema check flags "integer" fields (guards the dev failure)', () => {
+    const strict = JSON.parse(JSON.stringify(dataSchema));
+    strict.properties.records.items.properties.year.type = 'integer';
+    const data = transformData(transformScript, { [key]: [{ quarter: 1, year: 2025, actual: 1, load_time: '2025-04-05T02:00:00Z' }] });
+    expect(validateAsRuntime(data, strict)).to.deep.equal(['$.records[0].year: number found, integer expected']);
+  });
 
   it('maps rows to KpiRecord with numeric actual and ISO-8601 UTC loadTime', () => {
     const rows = [
