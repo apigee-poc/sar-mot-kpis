@@ -1,0 +1,81 @@
+{
+  "displayName": "test-2026-empty",
+  "description": "total_freight 2026: no rows, data is [].",
+  "triggerId": "api_trigger/sar-kpi-get-staging",
+  "testInputParameters": [
+    {
+      "key": "kpiCode",
+      "dataType": "STRING_VALUE",
+      "defaultValue": {
+        "stringValue": "total_freight"
+      },
+      "displayName": "kpiCode",
+      "inputOutputType": "IN"
+    },
+    {
+      "key": "year",
+      "dataType": "INT_VALUE",
+      "defaultValue": {
+        "intValue": "2026"
+      },
+      "displayName": "year",
+      "inputOutputType": "IN"
+    },
+    {
+      "key": "quarter",
+      "dataType": "INT_VALUE",
+      "defaultValue": {
+        "intValue": "0"
+      },
+      "displayName": "quarter",
+      "inputOutputType": "IN"
+    }
+  ],
+  "testTaskConfigs": [
+    {
+      "taskNumber": "1",
+      "task": "JavaScriptTask",
+      "mockConfig": {
+        "mockStrategy": "NO_MOCK_STRATEGY"
+      },
+      "assertions": [
+        {
+          "assertionStrategy": "ASSERT_SUCCESSFUL_EXECUTION"
+        }
+      ]
+    },
+    {
+      "taskNumber": "2",
+      "task": "GenericConnectorTask",
+      "mockConfig": {
+        "mockStrategy": "NO_MOCK_STRATEGY"
+      },
+      "assertions": [
+        {
+          "assertionStrategy": "ASSERT_SUCCESSFUL_EXECUTION"
+        }
+      ]
+    },
+    {
+      "taskNumber": "3",
+      "task": "JavaScriptTask",
+      "mockConfig": {
+        "mockStrategy": "NO_MOCK_STRATEGY"
+      },
+      "assertions": [
+        {
+          "assertionStrategy": "ASSERT_SUCCESSFUL_EXECUTION"
+        },
+        {
+          "assertionStrategy": "ASSERT_EQUALS",
+          "parameter": {
+            "key": "data",
+            "value": {
+              "jsonValue": "[]"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

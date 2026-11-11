@@ -1,0 +1,13 @@
+{
+  "inputParameters": {
+    "kpiCode": {
+      "stringValue": "total_freight"
+    },
+    "year": {
+      "intValue": "2024"
+    },
+    "quarter": {
+      "intValue": "0"
+    }
+  }
+}
