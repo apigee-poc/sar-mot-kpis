@@ -42,7 +42,9 @@ function inlineScript(step, subs) {
     .replace(/\$\$/g, '$');
 }
 
-describe('Cloud Build pipelines (static)', () => {
+describe('Cloud Build pipelines (static)', function () {
+  // bash -n per inline script spawns many processes (slow on Windows).
+  this.timeout(60000);
   const docs = {};
   FILES.forEach((f) => { docs[f] = load(f); });
 
