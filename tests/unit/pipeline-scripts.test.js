@@ -153,6 +153,16 @@ describe('P7 pipeline scripts', function () {
     const SHA = 'a1b2c3d';
     let work;
 
+    // These tests copy the repo bundle; on an already stamped tree (pipeline step 1 ran) they
+    // cannot exercise the stamping, so they are skipped (the PR pipeline runs them unstamped).
+    before(function () {
+      const cfg = fs.readFileSync(path.join(BUNDLE, 'policies', 'KVM-GetConfig.xml'), 'utf8');
+      if (!cfg.includes('mapIdentifier="sar-mot-kpis-config-__KVM_VERSION__"')) {
+        console.log('      (skipped: the repo bundle is already stamped)');
+        this.skip();
+      }
+    });
+
     beforeEach(() => {
       work = tmpDir('p7-stamp-');
       fs.cpSync(BUNDLE, path.join(work, 'apiproxy'), { recursive: true });
@@ -360,7 +370,11 @@ describe('P7 pipeline scripts', function () {
         expect(r.err).to.match(/could not parse/);
       });
 
-      it('an empty token exits non-zero before curl', () => {
+      it('an empty token exits non-zero before curl', function () {
+        // The scripts fall back to /workspace/.token, which holds a real token in Cloud Build.
+        if (fs.existsSync('/workspace/.token')) {
+          this.skip();
+        }
         const r = get({ FAKE_CURL_LIST: bodyFile(LIST) }, '');
         expect(r.code).to.equal(1);
         expect(r.err).to.match(/access token/);

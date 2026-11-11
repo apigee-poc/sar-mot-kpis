@@ -77,7 +77,11 @@ gcloud iam service-accounts add-iam-policy-binding "${PROXY_RUNTIME_EMAIL}" \
 # A missing agent or a failed grant does NOT stop the later grants; the script exits 3 at the end.
 INTEGRATIONS_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-integrations.iam.gserviceaccount.com"
 INCOMPLETE=""
-AGENT_IN_POLICY="$(gcloud projects get-iam-policy "${PROJECT_ID}"   --flatten="bindings[].members"   --filter="bindings.members:serviceAccount:${INTEGRATIONS_SERVICE_AGENT}"   --format="value(bindings.role)" 2>/dev/null || true)"
+AGENT_IN_POLICY="$(gcloud projects get-iam-policy "${PROJECT_ID}" \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:serviceAccount:${INTEGRATIONS_SERVICE_AGENT}" \
+  --format="value(bindings.role)" \
+  --quiet 2>/dev/null || true)"
 if [[ -z "${AGENT_IN_POLICY}" ]]; then
   echo "WARNING: Application Integration service agent ${INTEGRATIONS_SERVICE_AGENT} not found in the" >&2
   echo "         IAM policy of ${PROJECT_ID}. Provision Application Integration in ${REGION:-us-central1}" >&2
@@ -85,7 +89,11 @@ if [[ -z "${AGENT_IN_POLICY}" ]]; then
   INCOMPLETE="${INCOMPLETE} connectors.invoker(service agent missing)"
 else
   echo "Granting roles/connectors.invoker to Application Integration Service Agent ${INTEGRATIONS_SERVICE_AGENT}..."
-  if ! gcloud projects add-iam-policy-binding "${PROJECT_ID}"     --member="serviceAccount:${INTEGRATIONS_SERVICE_AGENT}"     --role="roles/connectors.invoker"     --condition=None     --quiet >/dev/null; then
+  if ! gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="serviceAccount:${INTEGRATIONS_SERVICE_AGENT}" \
+    --role="roles/connectors.invoker" \
+    --condition=None \
+    --quiet >/dev/null; then
     echo "WARNING: granting roles/connectors.invoker to ${INTEGRATIONS_SERVICE_AGENT} failed; continuing." >&2
     INCOMPLETE="${INCOMPLETE} connectors.invoker(grant failed)"
   fi
@@ -154,10 +162,15 @@ fi
 
 # 8. Let the build SA read the four Newman test-app secrets (P7: tests/run-newman.sh in Cloud
 # Build). Secret-level bindings only, each applied only if the secret exists (infra/05 creates them).
-for NEWMAN_SECRET in sar-mot-poc-app-api-key sar-mot-poc-app-api-secret                      sar-mot-poc-other-app-api-key sar-mot-poc-other-app-api-secret; do
-  if gcloud secrets describe "${NEWMAN_SECRET}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+for NEWMAN_SECRET in sar-mot-poc-app-api-key sar-mot-poc-app-api-secret \
+                     sar-mot-poc-other-app-api-key sar-mot-poc-other-app-api-secret; do
+  if gcloud secrets describe "${NEWMAN_SECRET}" --project="${PROJECT_ID}" --quiet >/dev/null 2>&1; then
     echo "Granting roles/secretmanager.secretAccessor on secret ${NEWMAN_SECRET} to ${CB_DEPLOY_SA}..."
-    gcloud secrets add-iam-policy-binding "${NEWMAN_SECRET}"       --member="serviceAccount:${CB_DEPLOY_SA}"       --role="roles/secretmanager.secretAccessor"       --project="${PROJECT_ID}"       --quiet >/dev/null
+    gcloud secrets add-iam-policy-binding "${NEWMAN_SECRET}" \
+      --member="serviceAccount:${CB_DEPLOY_SA}" \
+      --role="roles/secretmanager.secretAccessor" \
+      --project="${PROJECT_ID}" \
+      --quiet >/dev/null
   else
     echo "Secret '${NEWMAN_SECRET}' does not exist yet (created by infra/05); re-run this script after infra/05."
   fi
