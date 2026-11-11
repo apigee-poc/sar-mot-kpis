@@ -18,12 +18,29 @@ function task(integration, taskId) {
   return integration.taskConfigs.find((t) => t.taskId === taskId);
 }
 
+// JSON_VALUE variables written by the scripts. On the real runtime, setParameter on a JSON
+// variable rejects a bare JS array ("The value assigned to data is not a Json value", seen in
+// dev); a plain object (task 1 -> connector input) and a JSON string are accepted.
+const JSON_VARS = ['data', '`Task_2_connectorInputPayload`'];
+
 // Runs an embedded JavaScriptTask script against a mock event.
 function runScript(script, params) {
   const out = {};
   const event = {
     getParameter: (k) => params[k],
-    setParameter: (k, v) => { out[k] = v; },
+    setParameter: (k, v) => {
+      if (JSON_VARS.includes(k)) {
+        if (Array.isArray(v)) {
+          throw new Error(`The value assigned to ${k} is not a Json value`);
+        }
+        if (typeof v === 'string') {
+          JSON.parse(v); // must be JSON text
+        } else if (v === null || typeof v !== 'object') {
+          throw new Error(`The value assigned to ${k} is not a Json value`);
+        }
+      }
+      out[k] = v;
+    },
     log: () => {}
   };
   const ctx = vm.createContext({});
@@ -31,6 +48,19 @@ function runScript(script, params) {
   ctx.executeScript(event);
   // Round-trip through JSON so values created in the vm context compare with deep.equal.
   return JSON.parse(JSON.stringify(out));
+}
+
+// Runs JS-TransformOutput and returns the raw value it set on `data`.
+function transformRaw(script, params) {
+  const raw = runScript(script, params).data;
+  expect(raw, 'data must be set as JSON text (string), not a JS array').to.be.a('string');
+  return raw;
+}
+
+function transform(script, params) {
+  const data = JSON.parse(transformRaw(script, params));
+  expect(data).to.be.an('array');
+  return data;
 }
 
 const integration = readJson(srcFile('dev'));
@@ -119,6 +149,13 @@ describe('integration sar-kpi-get: JS-BuildConnectorInput (task 1)', () => {
     ]);
   });
 
+  it('sets the connector input as a plain JSON object', () => {
+    const out = runScript(buildScript, { kpiCode: 'total_freight', year: 2025, quarter: 0 });
+    const p = out['`Task_2_connectorInputPayload`'];
+    expect(p).to.be.an('object');
+    expect(Array.isArray(p)).to.equal(false);
+  });
+
   it('passes a real quarter through twice', () => {
     const out = runScript(buildScript, { kpiCode: 'total_freight', year: 2025, quarter: 3 });
     const qp = out['`Task_2_connectorInputPayload`'].queryParameters;
@@ -141,8 +178,7 @@ describe('integration sar-kpi-get: JS-TransformOutput (task 3)', () => {
       { quarter: 2.0, year: 2025.0, actual: 1388200.0, load_time: '2025-07-05T02:00:00Z' },
       { quarter: 3, year: 2025, actual: 1512750, load_time: '2025-10-05 05:00:00+03' }
     ];
-    const out = runScript(transformScript, { [key]: rows });
-    expect(out.data).to.deep.equal([
+    expect(transform(transformScript, { [key]: rows })).to.deep.equal([
       { quarter: 1, year: 2025, actual: 1420500, loadTime: '2025-04-05T02:00:00Z' },
       { quarter: 2, year: 2025, actual: 1388200, loadTime: '2025-07-05T02:00:00Z' },
       { quarter: 3, year: 2025, actual: 1512750, loadTime: '2025-10-05T02:00:00Z' }
@@ -151,23 +187,22 @@ describe('integration sar-kpi-get: JS-TransformOutput (task 3)', () => {
 
   it('accepts the payload as a JSON string', () => {
     const rows = JSON.stringify([{ quarter: 3, year: 2025, actual: 1512750, load_time: '2025-10-05T02:00:00.000+00:00' }]);
-    const out = runScript(transformScript, { [key]: rows });
-    expect(out.data).to.deep.equal([{ quarter: 3, year: 2025, actual: 1512750, loadTime: '2025-10-05T02:00:00Z' }]);
+    expect(transform(transformScript, { [key]: rows })).to.deep.equal([{ quarter: 3, year: 2025, actual: 1512750, loadTime: '2025-10-05T02:00:00Z' }]);
   });
 
   it('returns [] (never null) when there are no rows', () => {
     [[], null, undefined, '', '[]'].forEach((empty) => {
-      expect(runScript(transformScript, { [key]: empty }).data).to.deep.equal([]);
+      expect(transformRaw(transformScript, { [key]: empty })).to.equal('[]');
     });
   });
 
   it('fails the task on an unparseable load_time', () => {
-    expect(() => runScript(transformScript, { [key]: [{ quarter: 1, year: 2025, actual: 1, load_time: 'bad' }] }))
+    expect(() => transformRaw(transformScript, { [key]: [{ quarter: 1, year: 2025, actual: 1, load_time: 'bad' }] }))
       .to.throw(/Invalid load_time/);
   });
 
   it('fails the task when the payload is not an array', () => {
-    expect(() => runScript(transformScript, { [key]: { error: 'x' } })).to.throw(/not an array/);
+    expect(() => transformRaw(transformScript, { [key]: { error: 'x' } })).to.throw(/not an array/);
   });
 
   it('produces exactly the data asserted by each test case from the seed rows', () => {
@@ -187,7 +222,7 @@ describe('integration sar-kpi-get: JS-TransformOutput (task 3)', () => {
         const rows = seed.filter((r) => r.year === year && (quarter === 0 || r.quarter === quarter));
         const expected = tc.testTaskConfigs.find((t) => t.taskNumber === '3')
           .assertions.find((a) => a.assertionStrategy === 'ASSERT_EQUALS').parameter.value.jsonValue;
-        expect(JSON.stringify(runScript(transformScript, { [key]: rows }).data)).to.equal(expected);
+        expect(transformRaw(transformScript, { [key]: rows })).to.equal(expected);
       });
     });
   });

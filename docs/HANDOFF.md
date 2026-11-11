@@ -180,8 +180,10 @@ Query parameters: `[kpiCode VARCHAR, year INTEGER, quarter INTEGER, quarter INTE
    the override sets it again.
 3. **`JS-TransformOutput`** (JavaScriptTask) — reads `` `Task_2_connectorOutputPayload` ``
    (auto-generated variables need backticks), maps rows to `KpiRecord` (`Number()` for numbers,
-   `load_time` → `YYYY-MM-DDTHH:MM:SSZ`), sets `data` to an array (`[]` when no rows), throws on
-   bad input. The scripts live inline in the src JSON and are unit-tested in
+   `load_time` → `YYYY-MM-DDTHH:MM:SSZ`) and sets `data` with `JSON.stringify(array)` (`"[]"` when no
+   rows); it throws on bad input. Setting a bare JS array on a JSON_VALUE variable fails at
+   runtime with "The value assigned to data is not a Json value" (seen in dev); a plain object
+   (task 1) and JSON text are accepted. The scripts live inline in the src JSON and are unit-tested in
    `tests/unit/integration-sar-kpi-get.test.js`.
 
 All three tasks use `failurePolicy` and `synchronousCallFailurePolicy` `FATAL`.
@@ -283,7 +285,10 @@ See `docs/PLAN.md` lines 210–232 for the full table. Key policies:
 | `AM-SetResponseRequestIdHeader` | AssignMessage | Echo X-Request-Id on every response |
 
 ### VERIFY items for P5
-1. Exact response shape of IntegrationEndpoint — where `data` sits in the JSON (needs debug session)
+1. Exact response shape of IntegrationEndpoint — where `data` sits in the JSON (needs debug session).
+   `data` is set from JSON text; check whether the execute response carries it as a JSON array
+   (ExtractVariables JSONPath on the array) or as a string holding JSON (then `JSON.parse` in a JS
+   policy before `RF-BadGateway` checks / `AM-BuildKpiResponse`).
 2. Default HTTP statuses of VerifyAPIKey/SpikeArrest/Quota faults — may need overrides
 3. Message-template syntax for ISO timestamp in AssignMessage
 
