@@ -298,9 +298,10 @@ All in Cloud Build, project `ci-cd-511313`, same triggers and service accounts a
   2. lint + unit tests
   3. `db/load.sh dev` (expand-only migrations + seed)
   4. connections apply for dev (no-op if unchanged)
-  5. record the published integration version → `integrationcli integrations apply
-     -f <copy of integration/dev with userLabel stamped> --run-tests=true` (D20, D23) (using the `integrationcli-builder` image) → roll back the integration on
-     failure
+  5. record the published integration version, then (with the `integrationcli-builder` image)
+     `integrationcli integrations apply -f <copy of integration/dev with userLabel stamped>
+     --skip-connectors=true --wait=true --run-tests=true` (D20, D23); on failure roll back the
+     integration (D25, D29)
   6. record the dev proxy revision → create versioned KVMs → deploy proxy with runtime SA →
      wait → Newman dev → on failure roll back **proxy, then integration**
   7. repeat steps 3–6 for staging, promoting the **same proxy revision** as in
@@ -314,7 +315,12 @@ dev back and staging is untouched.
 
 ## P8 — Prod
 
-1. 👤 Provision Application Integration in `us-central1` for `apigee-prod-511508`.
+1. 👤 Provision Application Integration in `us-central1` for `apigee-prod-511508` (Console
+   **Quick setup**, once per project/region, D28). Then grant the Application Integration service
+   agent `service-<PROJECT_NUMBER>@gcp-sa-integrations.iam.gserviceaccount.com`
+   `roles/connectors.invoker` on the prod project (the prod variant of
+   `infra/02-service-accounts-iam.sh`); without it publish fails with
+   `connectors.connections.get` denied.
 2. Run `cloudbuild-infra.yaml` with `_TARGET=prod` (👤 approve). It creates the same
    foundation, `sar-kpi-sql-prod` / `kpis_prod`, the endpoint attachment, the connection
    `sar-kpi-db-prod`, the runtime SA, and grants for `cb-deploy-prod`.
@@ -323,7 +329,10 @@ dev back and staging is untouched.
    - read its commit SHA from the bundle description
    - **fail if it differs from the build's commit**
    - seed `kpis_prod`
-   - apply the integration with prod overrides
+   - apply the integration from `integration/prod/` (`src/sar-kpi-get-prod.json` with the
+     `sar-kpi-db-prod` connection and `api_trigger/sar-kpi-get-prod`, plus
+     `overrides/overrides.json`, `tests/`, `test-configs/`; userLabel stamped, no `-e`;
+     D20–D23)
    - copy the proxy revision to the prod org
    - create the versioned KVMs
    - deploy with the prod runtime SA

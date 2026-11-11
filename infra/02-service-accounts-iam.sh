@@ -65,6 +65,18 @@ gcloud iam service-accounts add-iam-policy-binding "${PROXY_RUNTIME_EMAIL}" \
   --project="${PROJECT_ID}" \
   --quiet >/dev/null
 
+# 4b. Grant the Application Integration service agent roles/connectors.invoker on the project.
+# Without it, publishing an integration with a Connectors task fails with
+# "Permission 'connectors.connections.get' denied" (D28). The agent exists only after
+# Application Integration has been provisioned in the project/region (Console Quick setup).
+INTEGRATIONS_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-integrations.iam.gserviceaccount.com"
+echo "Granting roles/connectors.invoker to Application Integration Service Agent ${INTEGRATIONS_SERVICE_AGENT}..."
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${INTEGRATIONS_SERVICE_AGENT}" \
+  --role="roles/connectors.invoker" \
+  --condition=None \
+  --quiet >/dev/null
+
 # 5. Grant cb-deploy-nonprod roles in apigee-nonprod-511322
 echo "Granting deployment roles to ${CB_DEPLOY_SA}..."
 
