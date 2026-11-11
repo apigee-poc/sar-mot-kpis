@@ -6,7 +6,6 @@
   <Policies>
     <Policy>AM-BuildErrorResponse</Policy>
     <Policy>AM-BuildKpiResponse</Policy>
-    <Policy>AM-CaptureRequestInputs</Policy>
     <Policy>AM-CheckErrorMessage</Policy>
     <Policy>AM-SetClientTraceId</Policy>
     <Policy>AM-SetIntegrationCalled</Policy>
@@ -25,6 +24,7 @@
     <Policy>JS-SetIntegrationParams</Policy>
     <Policy>JS-ValidateApiSecret</Policy>
     <Policy>JS-ValidateIntegrationOutput</Policy>
+    <Policy>JS-ValidateRequestInputs</Policy>
     <Policy>JS-ValidateRequestTimestamp</Policy>
     <Policy>KVM-GetConfig</Policy>
     <Policy>KVM-GetErrorMessage</Policy>
@@ -53,6 +53,7 @@
     <Resource>jsc://setIntegrationParams.js</Resource>
     <Resource>jsc://validateApiSecret.js</Resource>
     <Resource>jsc://validateIntegrationOutput.js</Resource>
+    <Resource>jsc://validateRequestInputs.js</Resource>
     <Resource>jsc://validateRequestTimestamp.js</Resource>
   </Resources>
   <TargetEndpoints/>

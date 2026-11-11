@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Javascript continueOnError="false" enabled="true" timeLimit="200" name="JS-ValidateRequestInputs">
+  <DisplayName>JS-ValidateRequestInputs</DisplayName>
+  <!-- Sets custom.requestIdValid, custom.operatorIdValid, custom.yearValid and
+       custom.quarterValid ("true"/"false"). The RF-* steps test them in catalog order (D34). -->
+  <ResourceURL>jsc://validateRequestInputs.js</ResourceURL>
+</Javascript>

@@ -34,12 +34,13 @@ const FORBIDDEN = [
 describe('proxy JS bundle: Rhino (ES5) compatibility and wiring', () => {
   const files = fs.readdirSync(JSC_DIR).filter((f) => f.endsWith('.js'));
 
-  it('finds the five JavaScript resources', () => {
+  it('finds the six JavaScript resources', () => {
     expect(files.sort()).to.deep.equal([
       'checkKpiAllowed.js',
       'setIntegrationParams.js',
       'validateApiSecret.js',
       'validateIntegrationOutput.js',
+      'validateRequestInputs.js',
       'validateRequestTimestamp.js'
     ]);
   });
@@ -99,7 +100,7 @@ describe('proxy JS bundle: Rhino (ES5) compatibility and wiring', () => {
 
     it('finds a jsc:// ResourceURL in each JS-* policy', () => {
       const jsPolicies = policyFiles.filter((f) => f.startsWith('JS-'));
-      expect(jsPolicies).to.have.length(5);
+      expect(jsPolicies).to.have.length(6);
       jsPolicies.forEach((f) => {
         expect(refs.filter((r) => r.policy === f), f).to.have.length(1);
       });
@@ -140,7 +141,11 @@ describe('proxy JS bundle: Rhino (ES5) compatibility and wiring', () => {
         'custom.secretValid',
         'custom.timestampValid',
         'custom.kpiAllowed',
-        'custom.outputValid'
+        'custom.outputValid',
+        'custom.requestIdValid',
+        'custom.operatorIdValid',
+        'custom.yearValid',
+        'custom.quarterValid'
       ].forEach((flag) => {
         expect(flow, flag).to.contain(`${flag} != "true"`);
         const owner = files.find((f) => jscSource(f).includes(`"${flag}"`));

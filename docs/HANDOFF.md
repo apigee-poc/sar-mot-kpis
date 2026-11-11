@@ -265,7 +265,8 @@ See the policy table in `docs/PLAN.md` section "P5 — Apigee proxy" for the ful
 |---|---|---|
 | `AM-SetTraceAndTimestamp` | AssignMessage | Set `custom.traceId = {createUuid()}` (D33), `custom.timestamp` = ISO-8601 UTC |
 | `KVM-GetConfig` | KeyValueMapOperations | Read from `sar-mot-kpis-config-__KVM_VERSION__` (incl. per-env integration name + trigger name) |
-| `RF-InvalidRequestId` | RaiseFault | Missing or non-UUID X-Request-Id → ERR-400-REQUESTID |
+| `JS-ValidateRequestInputs` | JavaScript | Validates X-Request-Id, X-Operator-Id, year, quarter; always sets the `custom.*Valid` flags (D34) |
+| `RF-InvalidRequestId` | RaiseFault | `custom.requestIdValid != "true"` (missing or non-UUID X-Request-Id) → ERR-400-REQUESTID |
 | `AM-SetClientTraceId` | AssignMessage | Overwrite `custom.traceId` with `X-Request-Id` header |
 | `VA-VerifyApiKey` | VerifyAPIKey | Verify `request.header.x-api-key` |
 | `RF-InvalidSecret` | RaiseFault | X-API-Secret ≠ client_secret → ERR-401-SECRET |
@@ -273,8 +274,8 @@ See the policy table in `docs/PLAN.md` section "P5 — Apigee proxy" for the ful
 | `Q-ImposeQuota` | Quota | Rates from KVM |
 | `JS-ValidateRequestTimestamp` | JavaScript | ISO parse + clock-skew check |
 | `RF-InvalidRequestTimestamp` | RaiseFault | ERR-400-TIMESTAMP |
-| `RF-InvalidOperatorId` | RaiseFault | Regex `^[12]\d{9}$` → ERR-400-OPERATOR |
-| `RF-InvalidQueryParams` | RaiseFault | year/quarter validation → ERR-400-PARAMS |
+| `RF-InvalidOperatorId` | RaiseFault | `custom.operatorIdValid != "true"` (`^[12]\d{9}$`) → ERR-400-OPERATOR |
+| `RF-InvalidQueryParams` | RaiseFault | `custom.yearValid` / `custom.quarterValid != "true"` → ERR-400-PARAMS |
 | `AM-SetKpiCode` | AssignMessage | Set `kpi.code = total_freight` |
 | `SIR-SetIntegrationRequest` | SetIntegrationRequest | Integration name, trigger name (`api_trigger/sar-kpi-get-<env>`, D22), project, region from KVM |
 | `RF-IntegrationError` | RaiseFault | Non-2xx from integration → ERR-500-INTEGRATION |

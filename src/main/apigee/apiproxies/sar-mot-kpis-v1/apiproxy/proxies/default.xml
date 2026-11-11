@@ -72,16 +72,17 @@
         <Name>AM-SetTraceAndTimestamp</Name>
       </Step>
       <Step>
-        <Name>AM-CaptureRequestInputs</Name>
-      </Step>
-      <Step>
         <Name>KVM-GetConfig</Name>
       </Step>
-      <!-- Conditions test only variables that always exist (captured inputs with the
-           __absent__ sentinel, JS flags): a missing header must not skip a check (D33). -->
+      <!-- All input presence/format checks are done in JavaScript, which only sets flags
+           ("true"/"false", always set). Conditions test only those flags, never a header or
+           query parameter that may be missing (D33, D34). The RF-* steps keep the catalog order. -->
+      <Step>
+        <Name>JS-ValidateRequestInputs</Name>
+      </Step>
       <Step>
         <Name>RF-InvalidRequestId</Name>
-        <Condition>!(custom.input.requestId JavaRegex "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")</Condition>
+        <Condition>custom.requestIdValid != "true"</Condition>
       </Step>
       <Step>
         <Name>AM-SetClientTraceId</Name>
@@ -114,7 +115,7 @@
       </Step>
       <Step>
         <Name>RF-InvalidOperatorId</Name>
-        <Condition>!(private.input.operatorId JavaRegex "[12][0-9]{9}")</Condition>
+        <Condition>custom.operatorIdValid != "true"</Condition>
       </Step>
     </Request>
     <Response/>
@@ -135,16 +136,11 @@
         </Step>
         <Step>
           <Name>RF-InvalidQueryParams</Name>
-          <Condition>!(custom.input.year JavaRegex "20[0-9]{2}")</Condition>
+          <Condition>custom.yearValid != "true"</Condition>
         </Step>
         <Step>
           <Name>RF-InvalidQueryParams</Name>
-          <Condition>(custom.input.quarter != "__absent__") and !(custom.input.quarter JavaRegex "[1-4]")</Condition>
-        </Step>
-        <Step>
-          <!-- "quarter=" present but empty: 400, independent of how Apigee treats an empty param -->
-          <Name>RF-InvalidQueryParams</Name>
-          <Condition>request.querystring JavaRegex "(.*&amp;)?quarter=(&amp;.*)?"</Condition>
+          <Condition>custom.quarterValid != "true"</Condition>
         </Step>
         <Step>
           <Name>JS-SetIntegrationParams</Name>

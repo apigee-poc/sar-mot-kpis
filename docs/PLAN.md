@@ -227,14 +227,15 @@ identifiers, stamped by the pipeline.
 |---|---|---|
 | PreFlow req | `AM-SetTraceAndTimestamp` | `custom.traceId = {createUuid()}` (not `messageid`, which is not a UUID, D33); `custom.timestamp` = ISO-8601 UTC (e.g. `timeFormatUTCMs` in a message template; VERIFY exact syntax in the emulator) |
 | | `KVM-GetConfig` | `sar-mot-kpis-config-__KVM_VERSION__`: integrationName, triggerName (`api_trigger/sar-kpi-get-<env>`, D22), projectId, region, spikeArrestRate, quotaLimit, quotaInterval, quotaTimeUnit, maxClockSkewSeconds, allowedKpis |
-| | `RF-InvalidRequestId` | missing or not a UUID → `ERR-400-REQUESTID` |
+| | `JS-ValidateRequestInputs` | validates X-Request-Id, X-Operator-Id, year and quarter in JavaScript and always sets `custom.requestIdValid`, `custom.operatorIdValid`, `custom.yearValid`, `custom.quarterValid` ("true"/"false"); conditions test only these flags (D34) |
+| | `RF-InvalidRequestId` | `custom.requestIdValid != "true"` (missing or not a UUID) → `ERR-400-REQUESTID` |
 | | `AM-SetClientTraceId` | `custom.traceId = request.header.X-Request-Id` |
 | | `VA-VerifyApiKey` | `request.header.x-api-key` |
 | | `RF-InvalidSecret` | `JS-ValidateApiSecret` (constant-time compare of `X-API-Secret` with `verifyapikey.VA-VerifyApiKey.client_secret`, sets `custom.secretValid`) → `ERR-401-SECRET` |
 | | `SA-SpikeArrest`, `Q-ImposeQuota` | rates from KVM, with API product quota overriding when set |
 | | `JS-ValidateRequestTimestamp` + `RF-InvalidRequestTimestamp` | ISO parse and clock-skew check → `ERR-400-TIMESTAMP` (unit-tested JS) |
-| | `RF-InvalidOperatorId` | `^[12]\d{9}$` → `ERR-400-OPERATOR` |
-| Flow `GetTotalFreight` (`/kpis/total_freight`, GET) | `RF-InvalidQueryParams` | year `^20\d{2}$`; quarter empty or `^[1-4]$` → `ERR-400-PARAMS` |
+| | `RF-InvalidOperatorId` | `custom.operatorIdValid != "true"` (`^[12]\d{9}$`) → `ERR-400-OPERATOR` |
+| Flow `GetTotalFreight` (`/kpis/total_freight`, GET) | `RF-InvalidQueryParams` | `custom.yearValid` / `custom.quarterValid != "true"` (year `^20\d{2}$`; quarter absent or `^[1-4]$`, an empty `quarter=` is invalid) → `ERR-400-PARAMS` |
 | | `AM-SetKpiCode` | `kpi.code = total_freight` |
 | | `SIR-SetIntegrationRequest` | name, trigger name, project and region read via `ref` from the KVM; parameters `kpiCode`, `year`, `quarter` as numbers set by `JS-SetIntegrationParams` (quarter `0` = all quarters when absent, D24) |
 | resp | `RF-IntegrationError` | status ≠ 2xx → `ERR-500-INTEGRATION` |
