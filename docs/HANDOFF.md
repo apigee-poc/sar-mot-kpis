@@ -152,12 +152,12 @@ integration/
 
 ---
 
-## P4 — Application Integration (next phase)
+## P4 — Application Integration
 
 ### What to build
 Integrations `sar-kpi-get-dev` and `sar-kpi-get-staging` (source: `integration/<env>/src/`) with:
 - **API trigger:** `api_trigger/sar-kpi-get-<env>` (per env, D22)
-- **Input parameters:** `kpiCode` (STRING), `year` (INT), `quarter` (INT, nullable — 0 means absent)
+- **Input parameters:** `kpiCode` (STRING), `year` (INT), `quarter` (INT, default `0` = all quarters; never null — P5 omits it or sends 0)
 - **Output parameter:** `data` (JSON_VALUE) = `{"records": [KpiRecord…]}`, default `{"records": []}` (D26)
 
 ### SQL query (task: ExecuteCustomQuery)
@@ -228,9 +228,11 @@ foreach ($e in 'dev', 'staging') {
   if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
   Copy-Item -Recurse ./integration/$e $tmp
   node -e "const f=process.argv[1];const j=JSON.parse(require('fs').readFileSync(f,'utf8'));j.userLabel=process.argv[2];require('fs').writeFileSync(f,JSON.stringify(j,null,2))" "$tmp/src/sar-kpi-get-$e.json" $SHORT_SHA
+  if ($LASTEXITCODE -ne 0) { throw "userLabel stamp failed for $e" }
   integrationcli integrations apply -f $tmp `
     --skip-connectors=true --wait=true --run-tests=true `
     -p apigee-nonprod-511322 -r us-central1 -t $token
+  if ($LASTEXITCODE -ne 0) { throw "apply failed for $e" }   # never apply staging after a failed dev
 }
 ```
 After apply, check that the published version's task 2 `connectionName` ends in `sar-kpi-db-<env>`
@@ -238,8 +240,8 @@ and its `userLabel` is the SHORT_SHA.
 
 ### New scripts required for P4
 - `scripts/get-published-integration-version.sh` — mirrors `get-deployed-revision.sh` (records the ACTIVE version before apply)
-- `scripts/rollback-integration.sh` — mirrors `rollback.sh`, but an ARCHIVED version cannot be
-  re-published: it copies the previous version's content into a **new draft** and publishes that;
+- `scripts/rollback-integration.sh` — mirrors `rollback.sh`, but publishing a new version moves the
+  old one to SNAPSHOT and an old version cannot be re-published by id (D29): it copies the previous version's content into a **new draft** and publishes that;
   with no previous version it unpublishes the failed one (D25)
 
 ### P4 Acceptance checks
@@ -257,7 +259,7 @@ and its `userLabel` is the SHORT_SHA.
 Full proxy at `src/main/apigee/apiproxies/sar-mot-kpis-v1/apiproxy/` following `pet-poc` naming.
 
 ### Policy table
-See `docs/PLAN.md` lines 210–232 for the full table. Key policies:
+See the policy table in `docs/PLAN.md` section "P5 — Apigee proxy" for the full table. Key policies:
 
 | Policy | Type | Purpose |
 |---|---|---|

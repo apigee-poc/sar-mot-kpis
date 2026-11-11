@@ -173,9 +173,11 @@ tester or a throwaway integration returns the seed rows for its own database onl
 
 **Goal:** `sar-kpi-get-dev` and `sar-kpi-get-staging`, published from the repo.
 
-1. Design once (👤 the Console editor is fine for the first version). The integration has:
+1. Design once. (Done by hand-authoring the src JSON — no Console access — and verified by a real
+   dev/staging deploy.) The integration has:
    - API trigger `api_trigger/sar-kpi-get-<env>` (per env, D22)
-   - Inputs: `kpiCode` (string), `year` (int), `quarter` (int, nullable)
+   - Inputs: `kpiCode` (string), `year` (int), `quarter` (int, default `0` = all quarters; never
+     null — P5 omits it or sends 0)
    - Connectors task on `sar-kpi-db-<env>`, action **Execute custom query**:
      ```sql
      SELECT quarter, year, actual, load_time FROM kpi_records
@@ -205,7 +207,8 @@ tester or a throwaway integration returns the seed rows for its own database onl
    apply the copy.
 5. Add `scripts/get-published-integration-version.sh` and `scripts/rollback-integration.sh`.
    These record the published version before apply and, on failure, restore that version's
-   content as a new draft and publish it (D25; ARCHIVED versions cannot be re-published),
+   content as a new draft and publish it (D25, D29: publishing a new version moves the old one to
+   SNAPSHOT, and an old version cannot be re-published by id),
    mirroring `get-deployed-revision.sh` / `rollback.sh`.
 
 **Acceptance:** both integrations are published with the commit SHA as label; test cases
@@ -301,7 +304,12 @@ All in Cloud Build, project `ci-cd-511313`, same triggers and service accounts a
   5. record the published integration version, then (with the `integrationcli-builder` image)
      `integrationcli integrations apply -f <copy of integration/dev with userLabel stamped>
      --skip-connectors=true --wait=true --run-tests=true` (D20, D23); on failure roll back the
-     integration (D25, D29)
+     integration (D25, D29). Also:
+     - record the published version id **after** apply too (rollback's `failed_version`
+       argument needs it for the no-previous-version / fallback-unpublish path, and step 8 reports it)
+     - scripted post-apply assertion on the ACTIVE version: task 2 `connectionName` ends in
+       `sar-kpi-db-<env>` and `userLabel` == SHORT_SHA; fail the build otherwise
+     - after a rollback, re-record the version id: the restored version gets a **new** id (D29)
   6. record the dev proxy revision → create versioned KVMs → deploy proxy with runtime SA →
      wait → Newman dev → on failure roll back **proxy, then integration**
   7. repeat steps 3–6 for staging, promoting the **same proxy revision** as in
@@ -310,6 +318,20 @@ All in Cloud Build, project `ci-cd-511313`, same triggers and service accounts a
 
 **Acceptance:** a merge to `main` reaches staging green. A commit with a broken test rolls
 dev back and staging is untouched.
+
+**P7 carry-over from P4 final review (no code yet):**
+- I-3: `scripts/get-published-integration-version.sh` fails open. It must exit non-zero on
+  401/403/5xx, network errors or an empty token, and treat only HTTP 200 without an ACTIVE version
+  or 404 as "none". Otherwise a transient failure makes `rollback-integration.sh` take the
+  "no previous version" branch and **unpublish** instead of restoring.
+- M-4: the same script's header says "never fails hard", but it exits non-zero when no Python
+  runs — reconcile with the I-3 fix.
+- M-5: `infra/02-service-accounts-iam.sh` should check that the Application Integration service
+  agent exists (Quick setup done, D28) before the `connectors.invoker` grant, with a clear message,
+  instead of aborting under `set -e` before the cb-deploy grants.
+- Deferred: orphan DRAFT left after a failed restore (note it in P9 DEPLOYMENT rollback notes);
+  rollback polling prints the API error every 5 s; a missing `kpiCode` becomes the literal
+  "undefined" in JS-BuildConnectorInput (P5 always sets it via `AM-SetKpiCode`).
 
 ---
 
@@ -332,7 +354,12 @@ dev back and staging is untouched.
    - apply the integration from `integration/prod/` (`src/sar-kpi-get-prod.json` with the
      `sar-kpi-db-prod` connection and `api_trigger/sar-kpi-get-prod`, plus
      `overrides/overrides.json`, `tests/`, `test-configs/`; userLabel stamped, no `-e`;
-     D20–D23)
+     D20–D23). The prod src task 2 `config` must use **prod** values in all three places that
+     hard-code non-prod today: `connectionName` project (`apigee-prod-511508`), `serviceName`
+     tenant project (the prod Connectors tenant, via `get-runtime-config`, not
+     `ef911070c468726ff-tp`) and `connectorVersion` project. When adding `prod` to `ENVS` in
+     `tests/unit/integration-sar-kpi-get.test.js`, extend its normalisation to the project id and
+     tenant project too.
    - copy the proxy revision to the prod org
    - create the versioned KVMs
    - deploy with the prod runtime SA

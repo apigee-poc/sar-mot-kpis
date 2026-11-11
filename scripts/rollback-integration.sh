@@ -2,8 +2,8 @@
 # Rolls back an Application Integration integration after a post-deployment test failure.
 # Usage: rollback-integration.sh <project> <region> <integration_name> <prev_version> [failed_version]
 #
-# If prev_version is present: a superseded (ARCHIVED) version cannot be re-published directly
-#   (the publish API rejects ACTIVE/ARCHIVED versions), so the previous version's content is
+# If prev_version is present: a superseded version (moved to SNAPSHOT when a newer version was
+#   published, D29) cannot be re-published by id, so the previous version's content is
 #   copied into a NEW DRAFT version (versions.create) which is then published and verified ACTIVE.
 #   If that restore fails, failed_version (if given) is unpublished as a safety net and the
 #   script exits non-zero.
