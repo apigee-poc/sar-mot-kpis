@@ -20,6 +20,7 @@
     "ratelimit.SA-SpikeArrest.identifier",
     "ratelimit.Q-ImposeQuota.identifier",
     "custom.rateIdentifier",
-    "request.queryparam.apikey"
+    "request.queryparam.apikey",
+    "verifyapikey.VA-VerifyApiKey.developer.email"
   ]
 }

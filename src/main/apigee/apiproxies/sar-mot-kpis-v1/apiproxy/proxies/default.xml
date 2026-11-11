@@ -9,12 +9,20 @@
     7. integration call and output validation
   -->
   <FaultRules>
-    <!-- ERROR-CATALOG row 5: valid key, product does not cover this resource -> 403 -->
+    <!-- ERROR-CATALOG row 5: valid key, product does not cover this resource (or the key
+         has no product at all) -> 403 (D41) -->
     <FaultRule name="invalid-key-for-resource">
       <Step>
         <Name>AM-SetStatus403</Name>
       </Step>
-      <Condition>fault.name = "InvalidApiKeyForGivenResource"</Condition>
+      <Condition>(fault.name = "InvalidApiKeyForGivenResource") or (fault.name = "consumer_key_missing_api_product_association")</Condition>
+    </FaultRule>
+    <!-- ERROR-CATALOG row 3: inactive company/AppGroup owner -> 401 (D41) -->
+    <FaultRule name="inactive-owner">
+      <Step>
+        <Name>AM-SetStatus401</Name>
+      </Step>
+      <Condition>fault.name = "CompanyStatusNotActive"</Condition>
     </FaultRule>
     <!-- ERROR-CATALOG rows 6-7: always 429 -->
     <FaultRule name="rate-limit">
@@ -25,15 +33,19 @@
     </FaultRule>
     <!-- Faults from the integration call. Faults raised by our own RF-* policies
          (e.g. RF-BadGateway in the response flow) set custom.proxyFault = "true" and are excluded.
-         ERROR-CATALOG row 15: timeout / unavailable -> 504; row 13: anything else -> 500. -->
+         Row 13 (500) first, unconditionally; row 15 (504) overwrites it for a timeout /
+         unavailable fault name or a 503/504 fault status (D41). -->
     <FaultRule name="integration-fault">
+      <Step>
+        <Name>AM-SetIntegrationError</Name>
+      </Step>
       <Step>
         <Name>AM-SetTimeoutError</Name>
         <Condition>(fault.name = "GatewayTimeout") or (fault.name = "ServiceUnavailable")</Condition>
       </Step>
       <Step>
-        <Name>AM-SetIntegrationError</Name>
-        <Condition>(fault.name != "GatewayTimeout") and (fault.name != "ServiceUnavailable")</Condition>
+        <Name>AM-SetTimeoutError</Name>
+        <Condition>(error.status.code = 503) or (error.status.code = 504)</Condition>
       </Step>
       <Condition>(custom.integrationCalled = "true") and (custom.proxyFault != "true")</Condition>
     </FaultRule>
@@ -159,6 +171,11 @@
         </Step>
       </Request>
       <Response>
+        <Step>
+          <!-- Row 15: a timeout / unavailable status returned as a response, not a fault (D41) -->
+          <Name>RF-GatewayTimeout</Name>
+          <Condition>(response.status.code = 503) or (response.status.code = 504)</Condition>
+        </Step>
         <Step>
           <Name>RF-IntegrationError</Name>
           <Condition>(response.status.code &lt; 200) or (response.status.code &gt; 299)</Condition>

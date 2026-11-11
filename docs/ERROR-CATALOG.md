@@ -21,6 +21,7 @@ Platform behaviour on Apigee X (D35):
   sent. For a valid ID this equals `header.traceId`. For a malformed ID (e.g. `nope`), the
   response header echoes the malformed value while `header.traceId` is a fresh UUID. This is an
   accepted deviation.
+
 The lookup key (column 3) is internal: it selects the message from the
 `sar-mot-kpis-errors-<SHA>` KVM and is written to logs, never to the client.
 
@@ -43,9 +44,9 @@ The first failing check wins.
 |---|---|---|---|---|
 | 1 | `X-Request-Id` not a UUID (a missing header is replaced by a platform UUID on Apigee X, D35) | `ERR-400-REQUESTID` | 400 | Header 'X-Request-Id' is required and must be a valid UUID. |
 | 2 | `X-API-Key` missing | `FailedToResolveAPIKey` | 401 | Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers. |
-| 3 | `X-API-Key` unknown / revoked / app not approved | `InvalidApiKey`, `ApiKeyNotApproved`, `DeveloperStatusNotActive`, `invalid_client-app_not_approved` | 401 | Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers. |
+| 3 | `X-API-Key` unknown / revoked / app not approved / owner inactive | `InvalidApiKey`, `ApiKeyNotApproved`, `DeveloperStatusNotActive`, `invalid_client-app_not_approved`, `CompanyStatusNotActive` | 401 | Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers. |
 | 4 | `X-API-Secret` missing or does not match the app | `ERR-401-SECRET` | 401 | Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers. |
-| 5 | Valid key, product does not include this resource | `InvalidApiKeyForGivenResource` | **403** (override) | API Key is not associated with an approved API Product for KPI data sharing. |
+| 5 | Valid key, product does not include this resource (or the key has no product) | `InvalidApiKeyForGivenResource`, `consumer_key_missing_api_product_association` | **403** (override) | API Key is not associated with an approved API Product for KPI data sharing. |
 | 6 | SpikeArrest exceeded | `SpikeArrestViolation` | 429 | Rate limit has been exceeded. |
 | 7 | Quota exceeded | `QuotaViolation` | 429 | Rate limit has been exceeded. |
 | 8 | `X-Request-Timestamp` missing, not ISO-8601 UTC, or outside allowed clock skew | `ERR-400-TIMESTAMP` | 400 | Header 'X-Request-Timestamp' is required and must be a UTC ISO-8601 date-time within the allowed clock skew. |
@@ -65,7 +66,13 @@ Notes:
 - Row 5: Apigee's default status for this fault is not 403. Add a FaultRule
   (`fault.name = "InvalidApiKeyForGivenResource"`) that sets `custom.statusOverride = 403`.
   `AM-BuildErrorResponse` must take `firstnonnull(custom.statusOverride, error.status.code, '500')`.
-  VERIFY the default status codes of rows 2, 3, 6 and 7 in a real environment, and add
-  overrides where they differ from this table.
+  The same FaultRule also maps `consumer_key_missing_api_product_association` (a key with no
+  product, Apigee default 400) to 403 (D41).
+- Default statuses (resolved): rows 2 and 3 return 401 by default (verified on dev, D40);
+  `CompanyStatusNotActive` is forced to 401 by a FaultRule; rows 6 and 7 are forced to 429 by the
+  `rate-limit` FaultRule, whatever the default (D41).
+- Rows 13–15: the response-flow RFs and the `integration-fault` FaultRule also set
+  `custom.statusOverride`; a 503/504 from the integration (as a response or as a fault status)
+  maps to row 15 (D41).
 - Rows 2–4 share one message on purpose. Never tell a caller which of key or secret was wrong.
 - An empty result is **not** an error: return 200 with `"data": []`.

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Javascript continueOnError="false" enabled="true" timeLimit="200" name="JS-SetIntegrationParams">
   <DisplayName>JS-SetIntegrationParams</DisplayName>
-  <!-- Sets numeric kpi.year and kpi.quarter (0 = all quarters) for SIR-SetIntegrationRequest. -->
+  <!-- Sets kpi.year and kpi.quarter as plain digit strings ("0" = all quarters) for
+       SIR-SetIntegrationRequest; a JS number resolved as "2,025" (D35). -->
   <ResourceURL>jsc://setIntegrationParams.js</ResourceURL>
 </Javascript>

@@ -1,17 +1,16 @@
-// Static scan of the ProxyEndpoint conditions for the "missing variable" trap
-// (D33, D34). In dev, three attempts to test a missing X-Request-Id in XML did not
-// fire, so the request went on to VerifyAPIKey and got 401 instead of 400:
-//   - `request.header.X-Request-Id = null` and `!(... JavaRegex ...)` (revision 1);
-//   - AssignVariable <Ref> + <Value> sentinel, then a regex on the copy (revision 2).
-// The inputs are therefore validated in JS-ValidateRequestInputs, which ALWAYS sets
-// "true"/"false" flags. Rules enforced here:
-//   1. No condition reads request.header.*, request.queryparam.* or request.querystring.
-//   2. A regex test (JavaRegex / ~~ / Matches / ~) on request.header/queryparam would
-//      need explicit `= null` and `= ""` guards (kept as a scanner rule for future edits).
-//   3. Every flag a condition compares with "true" is set by a JS resource with
-//      String(...), so it always exists.
-//   4. No condition compares a possibly-missing variable with null
+// Static checks of the ProxyEndpoint conditions and fault handling (D33-D36, D41).
+// Inputs are validated in JS-ValidateRequestInputs, which ALWAYS sets "true"/"false"
+// flags. (The dev "missing X-Request-Id gives 401" defect turned out to be the platform
+// injecting the header, D35; the always-set flag design stays as the safe pattern.)
+// Rules enforced here:
+//   1. No condition reads request.* (header, queryparam, querystring, verb, path, uri, url):
+//      inputs are captured in the PreFlow (D34, D36).
+//   2. Every flag a condition compares with "true" is always set (JS String(...) or a
+//      "false" default in AM-SetTraceAndTimestamp).
+//   3. No condition compares a possibly-missing variable with null
 //      (only the debug-only `response.content != null`).
+//   4. Fault handling: every RF-* sets custom.proxyFault and custom.errorCode; the
+//      response-flow RFs pin custom.statusOverride; the FaultRules are mutually exclusive.
 const fs = require('fs');
 const path = require('path');
 const { expect } = require('chai');
@@ -56,20 +55,6 @@ function readsMutableRequestLine(condition) {
   return /\brequest\.(?:verb|path|uri|url)\b/.test(condition);
 }
 
-function unguardedRequestRegex(condition) {
-  const findings = [];
-  const re = new RegExp(`(request\\.(?:header|queryparam)\\.[A-Za-z0-9_.-]+)\\s+${REGEX_OP}\\s`, 'g');
-  let m = re.exec(condition);
-  while (m) {
-    const v = escapeRe(m[1]);
-    const hasNull = new RegExp(`${v}\\s*(?:=|==|Equals|Is)\\s*null`, 'i').test(condition);
-    const hasEmpty = new RegExp(`${v}\\s*(?:=|==|Equals|Is)\\s*""`, 'i').test(condition);
-    if (!hasNull || !hasEmpty) findings.push(m[1]);
-    m = re.exec(condition);
-  }
-  return findings;
-}
-
 function flagsComparedWithTrue(condition) {
   const out = [];
   const re = /([A-Za-z0-9_.-]+)\s*!?=\s*"true"/g;
@@ -89,16 +74,6 @@ describe('proxy conditions: no missing-variable trap (D33, D34)', () => {
       expect(readsRequestInput('request.querystring JavaRegex "(.*&)?quarter=(&.*)?"')).to.equal(true);
       expect(readsRequestInput('custom.requestIdValid != "true"')).to.equal(false);
       expect(readsRequestInput('request.verb != "GET"')).to.equal(false);
-    });
-    it('flags an unguarded regex on a header (revision 1 condition)', () => {
-      expect(unguardedRequestRegex('!(request.header.X-Request-Id JavaRegex "[0-9]+")'))
-        .to.deep.equal(['request.header.X-Request-Id']);
-      expect(unguardedRequestRegex(
-        '(request.header.X-Operator-Id = null) or !(request.header.X-Operator-Id JavaRegex "[12][0-9]{9}")'
-      )).to.deep.equal(['request.header.X-Operator-Id']);
-      expect(unguardedRequestRegex(
-        '(request.header.A = null) or (request.header.A = "") or !(request.header.A JavaRegex "x")'
-      )).to.deep.equal([]);
     });
     it('finds flags compared with "true"', () => {
       expect(flagsComparedWithTrue('(custom.integrationCalled = "true") and (custom.proxyFault != "true")'))
@@ -155,12 +130,6 @@ describe('proxy conditions: no missing-variable trap (D33, D34)', () => {
       const notFound = xml.slice(xml.indexOf('<Flow name="NotFound">'), xml.indexOf('</Flows>'));
       expect(notFound).to.not.contain('<Condition>'); // unconditional catch-all, last
     });
-  });
-
-  it('no regex test on request.header / request.queryparam lacks explicit null and empty guards', () => {
-    const bad = [];
-    conditions.forEach((c) => unguardedRequestRegex(c).forEach((v) => bad.push(`${v} in: ${c}`)));
-    expect(bad).to.deep.equal([]);
   });
 
   it('no condition compares a possibly-missing variable with null', () => {
@@ -220,12 +189,90 @@ describe('proxy conditions: no missing-variable trap (D33, D34)', () => {
     expect(am).to.match(/<Name>custom\.traceId<\/Name>\s*<Template>\{createUuid\(\)\}<\/Template>/);
   });
 
-  it('AM-CaptureRequestInputs and its copies are gone (D34)', () => {
-    expect(fs.existsSync(path.join(BUNDLE, 'policies', 'AM-CaptureRequestInputs.xml'))).to.equal(false);
-    const all = fs.readdirSync(path.join(BUNDLE, 'policies'))
-      .map((f) => fs.readFileSync(path.join(BUNDLE, 'policies', f), 'utf8'))
-      .concat([fs.readFileSync(PROXY, 'utf8'), fs.readFileSync(path.join(BUNDLE, 'sar-mot-kpis-v1.xml'), 'utf8')])
-      .join('\n');
-    expect(all).to.not.match(/custom\.input\.|private\.input\.|AM-CaptureRequestInputs/);
+  describe('fault handling invariants (final review I1, I2, M4)', () => {
+    const POLICIES = path.join(BUNDLE, 'policies');
+    const strip = (xml) => xml.replace(/<!--[\s\S]*?-->/g, '');
+    const rfFiles = fs.readdirSync(POLICIES).filter((f) => /^RF-.*\.xml$/.test(f));
+    const assigns = (xml, name) => {
+      const m = new RegExp(`<AssignVariable>\\s*<Name>${escapeRe(name)}</Name>\\s*<Value>([^<]*)</Value>`).exec(xml);
+      return m ? m[1] : null;
+    };
+
+    it('every RF-* sets custom.proxyFault = "true" and a custom.errorCode (so integration-fault never relabels it)', () => {
+      expect(rfFiles.length).to.be.greaterThan(5);
+      rfFiles.forEach((f) => {
+        const xml = strip(fs.readFileSync(path.join(POLICIES, f), 'utf8'));
+        expect(assigns(xml, 'custom.proxyFault'), f).to.equal('true');
+        expect(assigns(xml, 'custom.errorCode'), f).to.match(/^ERR-/);
+      });
+    });
+
+    it('the response-flow RFs also pin their status with custom.statusOverride', () => {
+      [['RF-GatewayTimeout.xml', '504'], ['RF-IntegrationError.xml', '500'], ['RF-BadGateway.xml', '502']].forEach(([f, st]) => {
+        const xml = strip(fs.readFileSync(path.join(POLICIES, f), 'utf8'));
+        expect(assigns(xml, 'custom.statusOverride'), f).to.equal(st);
+        expect(xml, f).to.contain(`<StatusCode>${st}</StatusCode>`);
+      });
+    });
+
+    it('RF-GatewayTimeout (503/504 response) runs before RF-IntegrationError', () => {
+      const xml = strip(fs.readFileSync(PROXY, 'utf8'));
+      expect(conditions).to.include('(response.status.code = 503) or (response.status.code = 504)');
+      expect(xml.indexOf('<Name>RF-GatewayTimeout</Name>')).to.be.greaterThan(-1);
+      expect(xml.indexOf('<Name>RF-GatewayTimeout</Name>')).to.be.lessThan(xml.indexOf('<Name>RF-IntegrationError</Name>'));
+    });
+
+    it('integration-fault: AM-SetIntegrationError unconditionally, then AM-SetTimeoutError overwrites on timeout names or 503/504', () => {
+      const xml = strip(fs.readFileSync(PROXY, 'utf8'));
+      const rule = /<FaultRule name="integration-fault">([\s\S]*?)<\/FaultRule>/.exec(xml)[1];
+      const steps = [];
+      const re = /<Step>\s*<Name>([^<]+)<\/Name>(?:\s*<Condition>([^<]*)<\/Condition>)?\s*<\/Step>/g;
+      let m = re.exec(rule);
+      while (m) {
+        steps.push([m[1], m[2] ? decode(m[2]) : null]);
+        m = re.exec(rule);
+      }
+      expect(steps).to.deep.equal([
+        ['AM-SetIntegrationError', null],
+        ['AM-SetTimeoutError', '(fault.name = "GatewayTimeout") or (fault.name = "ServiceUnavailable")'],
+        ['AM-SetTimeoutError', '(error.status.code = 503) or (error.status.code = 504)']
+      ]);
+    });
+
+    it('the FaultRules are mutually exclusive (pre-call fault names vs integrationCalled = "true")', () => {
+      const xml = strip(fs.readFileSync(PROXY, 'utf8'));
+      const rules = [];
+      const re = /<FaultRule name="([^"]+)">([\s\S]*?)<\/FaultRule>/g;
+      let m = re.exec(xml);
+      while (m) {
+        const cond = /<Condition>([^<]*)<\/Condition>\s*$/.exec(m[2].trim());
+        rules.push({ name: m[1], cond: cond ? decode(cond[1]) : '' });
+        m = re.exec(xml);
+      }
+      expect(rules.map((r) => r.name)).to.deep.equal(['invalid-key-for-resource', 'inactive-owner', 'rate-limit', 'integration-fault']);
+      const names = {};
+      rules.filter((r) => r.name !== 'integration-fault').forEach((r) => {
+        // Only fault.name equality tests, OR-ed together; each name in exactly one rule.
+        const stripped = r.cond.replace(/\(fault\.name = "[A-Za-z_-]+"\)|fault\.name = "[A-Za-z_-]+"|\s+or\s+/g, '');
+        expect(stripped, r.name).to.equal('');
+        (r.cond.match(/"([A-Za-z_-]+)"/g) || []).forEach((n) => {
+          expect(names[n], `${n} in two FaultRules`).to.equal(undefined);
+          names[n] = r.name;
+        });
+      });
+      // These faults come from VerifyAPIKey / SpikeArrest / Quota, all before AM-SetIntegrationCalled,
+      // so custom.integrationCalled is still "false" when they fire.
+      expect(Object.keys(names).sort()).to.deep.equal([
+        '"CompanyStatusNotActive"', '"InvalidApiKeyForGivenResource"', '"QuotaViolation"',
+        '"SpikeArrestViolation"', '"consumer_key_missing_api_product_association"'
+      ].sort());
+      const integ = rules.find((r) => r.name === 'integration-fault');
+      expect(integ.cond).to.equal('(custom.integrationCalled = "true") and (custom.proxyFault != "true")');
+      const flow = xml;
+      expect(flow.indexOf('<Name>Q-ImposeQuota</Name>')).to.be.lessThan(flow.indexOf('<Name>AM-SetIntegrationCalled</Name>'));
+      expect(flow.indexOf('<Name>SIR-SetIntegrationRequest</Name>')).to.be.lessThan(flow.indexOf('<Name>AM-SetIntegrationCalled</Name>'));
+      const trace = fs.readFileSync(path.join(POLICIES, 'AM-SetTraceAndTimestamp.xml'), 'utf8');
+      expect(trace).to.match(/<Name>custom\.integrationCalled<\/Name>\s*<Value>false<\/Value>/);
+    });
   });
 });

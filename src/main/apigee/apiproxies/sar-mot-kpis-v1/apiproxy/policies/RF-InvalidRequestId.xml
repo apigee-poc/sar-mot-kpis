@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <RaiseFault continueOnError="false" enabled="true" name="RF-InvalidRequestId">
   <DisplayName>RF-InvalidRequestId</DisplayName>
-  <!-- ERROR-CATALOG row 1: X-Request-Id missing or not a UUID.
+  <!-- ERROR-CATALOG row 1: X-Request-Id malformed (not a UUID). A missing header cannot
+       be detected on Apigee X: the platform adds one before the proxy runs (D35).
        No payload here: the DefaultFaultRule builds the error envelope. -->
   <FaultResponse>
     <AssignVariable>

@@ -12,6 +12,10 @@
       <Name>custom.proxyFault</Name>
       <Value>true</Value>
     </AssignVariable>
+    <AssignVariable>
+      <Name>custom.statusOverride</Name>
+      <Value>502</Value>
+    </AssignVariable>
     <Set>
       <StatusCode>502</StatusCode>
       <ReasonPhrase>Bad Gateway</ReasonPhrase>

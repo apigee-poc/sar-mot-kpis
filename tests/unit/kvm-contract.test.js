@@ -123,9 +123,9 @@ describe('environment KVM files and proxy contract', () => {
   const catalogKeys = [];
   catalog.forEach((r) => r.keys.forEach((k) => catalogKeys.push(k)));
 
-  it('parses the catalog (16 rows, 19 lookup keys)', () => {
+  it('parses the catalog (16 rows, 21 lookup keys)', () => {
     expect(catalog).to.have.length(16);
-    expect(catalogKeys).to.have.length(19);
+    expect(catalogKeys).to.have.length(21);
   });
 
   ENVS.forEach((env) => {
@@ -154,7 +154,7 @@ describe('environment KVM files and proxy contract', () => {
       it('error keys equal the lookup keys of the catalog and cover every key the proxy uses', () => {
         const errors = readJson(kvmFile(env, 'sar-mot-kpis-errors'));
         const keys = entryNames(errors);
-        expect(keys).to.have.length(19);
+        expect(keys).to.have.length(21);
         expect(sorted(keys)).to.deep.equal(sorted(catalogKeys));
         proxyErrorKeys().forEach((k) => {
           expect(keys, `proxy references ${k}`).to.include(k);
@@ -186,7 +186,7 @@ describe('environment KVM files and proxy contract', () => {
         // Rows 2-4 share one message on purpose: never reveal whether key or secret was wrong.
         const shared = byKey['FailedToResolveAPIKey'];
         ['InvalidApiKey', 'ApiKeyNotApproved', 'DeveloperStatusNotActive',
-          'invalid_client-app_not_approved', 'ERR-401-SECRET'].forEach((k) => {
+          'invalid_client-app_not_approved', 'CompanyStatusNotActive', 'ERR-401-SECRET'].forEach((k) => {
           expect(byKey[k]).to.equal(shared);
         });
         // No characters that would need escaping in the JSON envelope.
@@ -258,7 +258,8 @@ describe('environment KVM files and proxy contract', () => {
           'ratelimit.SA-SpikeArrest.identifier',
           'ratelimit.Q-ImposeQuota.identifier',
           'custom.rateIdentifier',
-          'request.queryparam.apikey'
+          'request.queryparam.apikey',
+          `verifyapikey.${verifyApiKeyPolicyName()}.developer.email`
         ]);
         expect(new Set(mask.variables).size, 'no duplicates').to.equal(mask.variables.length);
       });

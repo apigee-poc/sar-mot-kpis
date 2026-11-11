@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <SpikeArrest continueOnError="false" enabled="true" name="SA-SpikeArrest">
   <DisplayName>SA-SpikeArrest</DisplayName>
-  <!-- Per app (custom.rateIdentifier = developer email/app name, never the API key, D37); the rate (e.g. 30pm) comes from the config KVM (D14). 30pm is the fallback. -->
+  <!-- Per app (custom.rateIdentifier = developer email/app name, never the API key, D37); the rate comes from the config KVM key spikeArrestRate (D14; e.g. 600pm non-prod,
+       300pm prod). The literal 30pm is only a fallback if the KVM value does not resolve. -->
   <Identifier ref="custom.rateIdentifier"/>
   <Rate ref="config.spikeArrestRate">30pm</Rate>
   <UseEffectiveCount>true</UseEffectiveCount>

@@ -12,6 +12,10 @@
       <Name>custom.proxyFault</Name>
       <Value>true</Value>
     </AssignVariable>
+    <AssignVariable>
+      <Name>custom.statusOverride</Name>
+      <Value>500</Value>
+    </AssignVariable>
     <Set>
       <StatusCode>500</StatusCode>
       <ReasonPhrase>Internal Server Error</ReasonPhrase>

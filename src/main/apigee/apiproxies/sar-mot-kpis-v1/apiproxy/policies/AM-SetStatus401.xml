@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-SetStatus401">
+  <DisplayName>AM-SetStatus401</DisplayName>
+  <!-- ERROR-CATALOG row 3: CompanyStatusNotActive is a credentials fault -> 401 (D41). -->
+  <AssignVariable>
+    <Name>custom.statusOverride</Name>
+    <Value>401</Value>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

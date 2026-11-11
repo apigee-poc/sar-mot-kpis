@@ -15,6 +15,7 @@
     <Policy>AM-SetQuotaValues</Policy>
     <Policy>AM-SetRateIdentifier</Policy>
     <Policy>AM-SetResponseRequestIdHeader</Policy>
+    <Policy>AM-SetStatus401</Policy>
     <Policy>AM-SetStatus403</Policy>
     <Policy>AM-SetStatus429</Policy>
     <Policy>AM-SetSystemError</Policy>
@@ -31,6 +32,7 @@
     <Policy>KVM-GetErrorMessage</Policy>
     <Policy>Q-ImposeQuota</Policy>
     <Policy>RF-BadGateway</Policy>
+    <Policy>RF-GatewayTimeout</Policy>
     <Policy>RF-IntegrationError</Policy>
     <Policy>RF-InvalidOperatorId</Policy>
     <Policy>RF-InvalidQueryParams</Policy>

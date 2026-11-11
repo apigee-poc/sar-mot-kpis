@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RaiseFault continueOnError="false" enabled="true" name="RF-GatewayTimeout">
+  <DisplayName>RF-GatewayTimeout</DisplayName>
+  <!-- ERROR-CATALOG row 15: the integration call returned 503 or 504 as a response.
+       No payload here: the DefaultFaultRule builds the error envelope. -->
+  <FaultResponse>
+    <AssignVariable>
+      <Name>custom.errorCode</Name>
+      <Value>ERR-504-TIMEOUT</Value>
+    </AssignVariable>
+    <AssignVariable>
+      <Name>custom.proxyFault</Name>
+      <Value>true</Value>
+    </AssignVariable>
+    <AssignVariable>
+      <Name>custom.statusOverride</Name>
+      <Value>504</Value>
+    </AssignVariable>
+    <Set>
+      <StatusCode>504</StatusCode>
+      <ReasonPhrase>Gateway Timeout</ReasonPhrase>
+    </Set>
+  </FaultResponse>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</RaiseFault>

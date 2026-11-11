@@ -11,7 +11,7 @@ Agents update the status line of a phase when they start or finish it.
 | P2 | Private Cloud SQL + mock data | DONE (b5813cf) |
 | P3 | Integration Connector (private) | DONE (8987442) |
 | P4 | Application Integration | DONE (3400476) |
-| P5 | Apigee proxy | TODO |
+| P5 | Apigee proxy | IN REVIEW |
 | P6 | Tests (unit, Newman, integration tests) | TODO |
 | P7 | CI/CD pipelines (PR + non-prod) | TODO |
 | P8 | Prod foundation + prod pipeline | TODO |
@@ -223,46 +223,68 @@ pass; executing via API returns `data.records` in the exact OAS `KpiRecord[]` sh
 Policies (pet-poc naming style). Use `__KVM_VERSION__` placeholders for the KVM map
 identifiers, stamped by the pipeline.
 
-| Stage | Policy | Purpose |
-|---|---|---|
-| PreFlow req | `AM-SetTraceAndTimestamp` | `custom.traceId = {createUuid()}` (not `messageid`, which is not a UUID, D33); `custom.timestamp` = ISO-8601 UTC (e.g. `timeFormatUTCMs` in a message template; VERIFY exact syntax in the emulator) |
-| | `KVM-GetConfig` | `sar-mot-kpis-config-__KVM_VERSION__`: integrationName, triggerName (`api_trigger/sar-kpi-get-<env>`, D22), projectId, region, spikeArrestRate, quotaLimit, quotaInterval, quotaTimeUnit, maxClockSkewSeconds, allowedKpis |
-| | `JS-ValidateRequestInputs` | validates X-Request-Id, X-Operator-Id, year and quarter in JavaScript and always sets `custom.requestIdValid`, `custom.operatorIdValid`, `custom.yearValid`, `custom.quarterValid` ("true"/"false"); conditions test only these flags (D34) |
-| | `RF-InvalidRequestId` | `custom.requestIdValid != "true"` (missing or not a UUID) → `ERR-400-REQUESTID` |
-| | `AM-SetClientTraceId` | `custom.traceId = request.header.X-Request-Id` |
-| | `VA-VerifyApiKey` | `request.header.x-api-key` |
-| | `RF-InvalidSecret` | `JS-ValidateApiSecret` (constant-time compare of `X-API-Secret` with `verifyapikey.VA-VerifyApiKey.client_secret`, sets `custom.secretValid`) → `ERR-401-SECRET` |
-| | `SA-SpikeArrest`, `Q-ImposeQuota` | rates from KVM, with API product quota overriding when set |
-| | `JS-ValidateRequestTimestamp` + `RF-InvalidRequestTimestamp` | ISO parse and clock-skew check → `ERR-400-TIMESTAMP` (unit-tested JS) |
-| | `RF-InvalidOperatorId` | `custom.operatorIdValid != "true"` (`^[12]\d{9}$`) → `ERR-400-OPERATOR` |
-| Flow `GetTotalFreight` (`/kpis/total_freight`, GET) | `RF-InvalidQueryParams` | `custom.yearValid` / `custom.quarterValid != "true"` (year `^20\d{2}$`; quarter absent or `^[1-4]$`, an empty `quarter=` is invalid) → `ERR-400-PARAMS` |
-| | `AM-SetKpiCode` | `kpi.code = total_freight` |
-| | `SIR-SetIntegrationRequest` | name, trigger name, project and region read via `ref` from the KVM; parameters `kpiCode`, `year`, `quarter` (type `integer`) from digit strings set by `JS-SetIntegrationParams` (quarter `"0"` = all quarters when absent, D24; a JS number resolved as `2,025`, D35) |
-| resp | `RF-IntegrationError` | status ≠ 2xx → `ERR-500-INTEGRATION` |
-| | `EV-ExtractIntegrationOutput` | JSONPath `$.outputParameters.data.records` (integration output is `{records:[…]}`, D26; VERIFY the exact path with a debug session) |
-| | `RF-BadGateway` | `data.records` missing, not an array, or > 4 items → `ERR-502-GATEWAY` |
-| | `AM-BuildKpiResponse` | `{header:{timestamp,traceId,isSuccess:true}, data:<records array>}`, 200 |
-| Flow `MethodNotAllowed` | `RF-MethodNotAllowed` | `ERR-405-METHOD` |
-| Flow `NotFound` (catch-all) | `RF-ResourceNotFound` | `ERR-404-RESOURCE` |
-| FaultRule (403) | `AM-SetStatus403` | `fault.name = "InvalidApiKeyForGivenResource"` |
-| DefaultFaultRule (`AlwaysEnforce=true`) | `AM-SetLookupKey` → `KVM-GetErrorMessage` → `AM-BuildErrorResponse` | integer `error.code`, `escapeJSON` on the message, status from override → `error.status.code` → 500 |
-| PostFlow resp + fault | `AM-SetResponseRequestIdHeader` | `X-Request-Id: {custom.traceId}` on every response (the platform still returns the client-sent value; for a malformed ID it differs from `header.traceId`, D35) |
+Bundle: 40 policies, 6 JS resources, ProxyEndpoint `default`, IntegrationEndpoint `default`
+(`integration-endpoints/default.xml`, no TargetEndpoint). Conditions never read `request.*`:
+inputs are validated in JavaScript into always-set `"true"`/`"false"` flags (D34), and the inbound
+verb is captured once (D36).
 
-Target: an **IntegrationEndpoint** target endpoint. Map timeout faults to `ERR-504-TIMEOUT`
-in a target FaultRule, as pet-poc does.
+| Stage | Step (condition) | Purpose |
+|---|---|---|
+| PreFlow req | `AM-SetTraceAndTimestamp` | `custom.timestamp` (ISO-8601 UTC via `timeFormatUTCMs`), `custom.traceId = {createUuid()}` (D33), `custom.messageId`, `custom.requestVerb` (D36), `custom.integrationCalled`/`custom.proxyFault` = `"false"` |
+| | `KVM-GetConfig` | `sar-mot-kpis-config-__KVM_VERSION__` (11 keys: integrationName, triggerName `api_trigger/sar-kpi-get-<env>` D22, projectId, region, spikeArrestRate, quotaLimit, quotaInterval, quotaTimeUnit, maxClockSkewSeconds, allowedKpis, commit) |
+| | `JS-ValidateRequestInputs` | sets `custom.requestIdValid`, `operatorIdValid`, `yearValid`, `quarterValid` (D34) |
+| | `RF-InvalidRequestId` (`custom.requestIdValid != "true"`) | malformed X-Request-Id → `ERR-400-REQUESTID` (a missing header is replaced by the platform, D35) |
+| | `AM-SetClientTraceId` | `custom.traceId` = the valid X-Request-Id |
+| | `VA-VerifyApiKey` | `X-API-Key` (rows 2, 3, 5) |
+| | `JS-ValidateApiSecret` | constant-time compare with `verifyapikey.VA-VerifyApiKey.client_secret` → `custom.secretValid` (D8) |
+| | `RF-InvalidSecret` (`custom.secretValid != "true"`) | `ERR-401-SECRET` |
+| | `AM-SetRateIdentifier` | `custom.rateIdentifier` = developer email / app name, never the key (D37) |
+| | `SA-SpikeArrest` | rate `config.spikeArrestRate` (literal 30pm only as fallback) |
+| | `AM-SetQuotaValues` → `Q-ImposeQuota` | product quota if set, else config KVM |
+| | `JS-ValidateRequestTimestamp` → `RF-InvalidRequestTimestamp` (`custom.timestampValid != "true"`) | `ERR-400-TIMESTAMP` (1–3 fractional digits, D42) |
+| | `RF-InvalidOperatorId` (`custom.operatorIdValid != "true"`) | `ERR-400-OPERATOR` |
+| Flow `GetTotalFreight` (`proxy.pathsuffix MatchesPath "/kpis/total_freight"` and `custom.requestVerb = "GET"`), req | `AM-SetKpiCode` → `JS-CheckKpiAllowed` → `RF-ResourceNotFound` (`custom.kpiAllowed != "true"`) | `kpi.code = total_freight`; allowlist `config.allowedKpis`, else 404 |
+| | `RF-InvalidQueryParams` (`custom.yearValid != "true"`; `custom.quarterValid != "true"`) | `ERR-400-PARAMS` |
+| | `JS-SetIntegrationParams` → `SIR-SetIntegrationRequest` → `AM-SetIntegrationCalled` | digit strings `kpi.year`/`kpi.quarter` (`"0"` = all) into `type="integer"` parameters (D35); name, trigger, project, region from the KVM |
+| resp | `RF-GatewayTimeout` (`response.status.code` 503 or 504) | `ERR-504-TIMEOUT` (D41) |
+| | `RF-IntegrationError` (status not 2xx) | `ERR-500-INTEGRATION` |
+| | `EV-ExtractIntegrationOutput` | `$.outputParameters.data.records` → `kpi.records` (debug only, `continueOnError`; path confirmed on dev, D36) |
+| | `JS-ValidateIntegrationOutput` → `RF-BadGateway` (`custom.outputValid != "true"`) | parses `response.content`, at most 4 valid records → `kpi.recordsJson`; else `ERR-502-GATEWAY` |
+| | `AM-BuildKpiResponse` | `{header:{timestamp,traceId,isSuccess:true}, data:<records>}`, 200 |
+| Flow `MethodNotAllowed` (same path, `custom.requestVerb != "GET"`) | `RF-MethodNotAllowed` | `ERR-405-METHOD`, sets `Allow: GET` |
+| Flow `NotFound` (unconditional, last) | `RF-ResourceNotFound` | `ERR-404-RESOURCE` |
+| PostFlow resp | `AM-SetResponseRequestIdHeader` | `X-Request-Id: {custom.traceId}` (the platform still returns the client-sent value, D35) |
+| FaultRule `invalid-key-for-resource` | `AM-SetStatus403` | `InvalidApiKeyForGivenResource` or `consumer_key_missing_api_product_association` → 403 (D41) |
+| FaultRule `inactive-owner` | `AM-SetStatus401` | `CompanyStatusNotActive` → 401 (D41) |
+| FaultRule `rate-limit` | `AM-SetStatus429` | `SpikeArrestViolation` / `QuotaViolation` → 429 |
+| FaultRule `integration-fault` (`custom.integrationCalled = "true"` and `custom.proxyFault != "true"`) | `AM-SetIntegrationError`, then `AM-SetTimeoutError` on GatewayTimeout / ServiceUnavailable or `error.status.code` 503/504 | 500 `ERR-500-INTEGRATION` or 504 `ERR-504-TIMEOUT` (D41) |
+| DefaultFaultRule (`AlwaysEnforce=true`) | `AM-SetLookupKey` → `KVM-GetErrorMessage` → `AM-CheckErrorMessage` → (no message: `AM-SetSystemError` + 2nd `KVM-GetErrorMessage`) → `AM-BuildErrorResponse` → `AM-SetResponseRequestIdHeader` | integer `error.code`, `escapeJSON` message, status override → `error.status.code` → 500; unmapped faults → `ERR-SYS-500` |
+
+The three FaultRules that test only `fault.name` fire before `AM-SetIntegrationCalled`, and
+`integration-fault` requires `custom.integrationCalled = "true"`, so the FaultRules are mutually
+exclusive and their evaluation order does not matter. Timeouts are mapped in the **ProxyEndpoint**
+FaultRule `integration-fault` and the response-flow `RF-GatewayTimeout`; there is no TargetEndpoint.
 
 Environment files:
-- `debugmask.json` masks `X-API-Key`, `X-API-Secret` and `X-Operator-Id`.
-- Config + error KVM definitions for `local`, `dev`, `staging` and `prod`. Error texts must
-  be copied verbatim from `ERROR-CATALOG.md`.
+- `debugmask.json` (all four envs) masks the credential headers (both case forms), `X-Operator-Id`,
+  `verifyapikey.VA-VerifyApiKey.client_id` / `client_secret` / `developer.email`, `client_id`,
+  `apigee.client_id`, `ratelimit.SA-SpikeArrest.identifier`, `ratelimit.Q-ImposeQuota.identifier`,
+  `custom.rateIdentifier` and `request.queryparam.apikey` (D37, D41). **Dev was masked by hand** with
+  `PATCH https://apigee.googleapis.com/v1/organizations/<org>/environments/<env>/debugmask?updateMask=variables`
+  (body `{"variables":[…]}` from `environments/<env>/debugmask.json`). Staging and prod are not masked
+  yet: **P7 must automate exactly that call for every environment.**
+- Config and error KVM definitions for `local`, `dev`, `staging` and `prod` (error KVM: 21 keys,
+  verbatim catalog texts).
 
 `infra/05-apigee-products-apps.sh`: create API product `sar-mot-kpis-product` (path
-`/kpis/**`, envs dev + staging), developer `mot-poc@example.com`, app `mot-poc-app`, and a
-second product **without** this path for the 403 test. Credentials go to Secret Manager for
-the pipelines and are never committed.
+`/kpis/**`, envs dev + staging, **no verb restriction**, D32), developer `mot-poc@example.com`, app
+`mot-poc-app`, and a second product **without** this path for the 403 test. Credentials go to
+Secret Manager for the pipelines and are never committed.
 
-**Acceptance:** `npm run lint` passes with 0/0; the local emulator passes every error case that
-doesn't need the integration; dev passes the full Newman suite.
+**Acceptance (waived as recorded in D39):** `npm run lint` passes with 0/0 and the unit tests pass;
+no emulator (user decision); the dev matrix was verified by hand (4 happy paths and rows 1
+(malformed), 2–5, 8–12). Rows 6, 7, 13, 14, 15 and 16 are **not** verified on dev and are part of
+P6 acceptance, using the fault-injection recipes in D39. The Newman suite is P6.
 
 ---
 
@@ -284,8 +306,21 @@ doesn't need the integration; dev passes the full Newman suite.
    (prod = read-only smoke subset). Credentials are injected by the pipeline from Secret
    Manager as Newman `--env-var`, never stored in files.
 
-**Acceptance:** the suite is green on dev, and a deliberately broken integration (wrong
-connection in overrides) produces the 500 case in a scratch test.
+4. Carried over from the P5 final review (D35, D38, D39):
+   - 404 tests use `/kpis/<unknown>` (a path outside `/kpis/**` gives 403, D32).
+   - Non-GET requests need an explicit empty body (`Content-Length: 0`, e.g. `curl --data ""`),
+     otherwise the front end answers HTTP 411.
+   - A `POST` without headers returns **400**. Row 1 is tested with a malformed X-Request-Id (a
+     missing header is replaced by the platform, D35); a POST with all valid headers gives 405.
+   - Assert `Allow: GET` on 405 (the proxy sets it in `RF-MethodNotAllowed`).
+   - Trace-ID assertions only for valid IDs (D35).
+   - `error.code` is a number equal to the HTTP status.
+   - 429 (rows 6, 7) via a scratch config (low `spikeArrestRate` / `quotaLimit`), **not** a burst (D38).
+   - The fault-injection runs for rows 6, 7, 13, 14, 15 and 16 (recipes in D39) are **P6
+     acceptance**; the row 13 run also records the IntegrationEndpoint fault name and path (V3/V9).
+
+**Acceptance:** the suite is green on dev, and the D39 fault-injection runs produce rows 6, 7, 13,
+14, 15 and 16 (or a row is explicitly waived with a reason).
 
 ---
 
@@ -312,9 +347,10 @@ All in Cloud Build, project `ci-cd-511313`, same triggers and service accounts a
      - scripted post-apply assertion on the ACTIVE version: task 2 `connectionName` ends in
        `sar-kpi-db-<env>` and `userLabel` == SHORT_SHA; fail the build otherwise
      - after a rollback, re-record the version id: the restored version gets a **new** id (D29)
-  6. deploy `debugmask.json` to the environment (`organizations/<org>/environments/<env>/debugmask`;
-     **nothing does this yet**, so the AGENTS.md rule 4 masking exists only on paper until this step
-     is added), then record the dev proxy revision → create versioned KVMs → deploy proxy with runtime SA →
+  6. deploy `debugmask.json` to the environment with
+     `PATCH https://apigee.googleapis.com/v1/organizations/<org>/environments/<env>/debugmask?updateMask=variables`
+     (body `{"variables":[…]}` from `environments/<env>/debugmask.json`; dev was done by hand this way
+     in P5, staging and prod are still unmasked), then record the dev proxy revision → create versioned KVMs → deploy proxy with runtime SA →
      wait → Newman dev → on failure roll back **proxy, then integration**
   7. repeat steps 3–6 for staging, promoting the **same proxy revision** as in
      `cicd-workspace`
@@ -389,10 +425,14 @@ promotion.
 
 1. Private path from Integration Connectors to PSC Cloud SQL (P3), and how to get the
    Connectors tenant project for `--allowed-psc-projects` (P2).
-2. Deploying a proxy with a service account via the Maven plugin vs the API (P0).
-3. Exact response shape of an IntegrationEndpoint target, i.e. where `data` sits (P5).
-4. Default HTTP statuses of VerifyAPIKey / SpikeArrest / Quota faults (P5).
-5. Message-template syntax for the ISO timestamp (P5).
+2. Deploying a proxy with a service account via the Maven plugin vs the API (P0). Resolved:
+   `apigee.googletoken.email` on plugin 2.5.2 (D16, verified on dev, D40).
+3. Exact response shape of an IntegrationEndpoint target, i.e. where `data` sits (P5). Resolved:
+   `$.outputParameters.data.records` (D36).
+4. Default HTTP statuses of VerifyAPIKey / SpikeArrest / Quota faults (P5). Resolved: rows 2 and 3
+   are 401 (verified, D40); 403 and 429 are forced by FaultRules (D41).
+5. Message-template syntax for the ISO timestamp (P5). Resolved: `timeFormatUTCMs` with a format
+   variable works on dev (D40).
 6. `integrationcli` folder layout and flags for the installed version (P4). Resolved: D20–D23.
 7. Whether the Apigee emulator can run anything integration-related. Assume not; mock-free
    local tests cover error paths only (P6).
