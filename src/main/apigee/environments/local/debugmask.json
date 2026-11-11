@@ -14,6 +14,12 @@
     "request.header.x-operator-id",
     "request.header.X-Operator-Id",
     "verifyapikey.VA-VerifyApiKey.client_id",
-    "verifyapikey.VA-VerifyApiKey.client_secret"
+    "verifyapikey.VA-VerifyApiKey.client_secret",
+    "client_id",
+    "apigee.client_id",
+    "ratelimit.SA-SpikeArrest.identifier",
+    "ratelimit.Q-ImposeQuota.identifier",
+    "custom.rateIdentifier",
+    "request.queryparam.apikey"
   ]
 }

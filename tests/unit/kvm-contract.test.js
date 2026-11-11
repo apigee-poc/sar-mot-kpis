@@ -249,6 +249,31 @@ describe('environment KVM files and proxy contract', () => {
           `verifyapikey.${va}.client_id`, `verifyapikey.${va}.client_secret`
         ]);
       });
+
+      it('debugmask.json masks every other variable a dev trace showed carrying the API key (D37)', () => {
+        const mask = readJson(path.join(ENV_DIR, env, 'debugmask.json'));
+        expect(mask.variables).to.include.members([
+          'client_id',
+          'apigee.client_id',
+          'ratelimit.SA-SpikeArrest.identifier',
+          'ratelimit.Q-ImposeQuota.identifier',
+          'custom.rateIdentifier',
+          'request.queryparam.apikey'
+        ]);
+        expect(new Set(mask.variables).size, 'no duplicates').to.equal(mask.variables.length);
+      });
+
+      it('debugmask.json masks ratelimit.<policy>.identifier for every SpikeArrest and Quota policy in the bundle', () => {
+        const mask = readJson(path.join(ENV_DIR, env, 'debugmask.json'));
+        const dir = path.join(PROXY_DIR, 'policies');
+        fs.readdirSync(dir).forEach((file) => {
+          const xml = read(path.join(dir, file)).replace(/<\?xml[^>]*\?>/, '').replace(/<!--[\s\S]*?-->/g, '');
+          if (/^\s*<(SpikeArrest|Quota)[\s>]/.test(xml)) {
+            const name = file.replace(/\.xml$/, '');
+            expect(mask.variables, name).to.include(`ratelimit.${name}.identifier`);
+          }
+        });
+      });
     });
   });
 

@@ -13,6 +13,7 @@
     <Policy>AM-SetKpiCode</Policy>
     <Policy>AM-SetLookupKey</Policy>
     <Policy>AM-SetQuotaValues</Policy>
+    <Policy>AM-SetRateIdentifier</Policy>
     <Policy>AM-SetResponseRequestIdHeader</Policy>
     <Policy>AM-SetStatus403</Policy>
     <Policy>AM-SetStatus429</Policy>

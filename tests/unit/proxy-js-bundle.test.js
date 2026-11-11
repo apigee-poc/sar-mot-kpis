@@ -162,4 +162,47 @@ describe('proxy JS bundle: Rhino (ES5) compatibility and wiring', () => {
       expect(jscSource('validateIntegrationOutput.js')).to.contain('"kpi.recordsJson"');
     });
   });
+
+  describe('rate-limit identifiers are never the API key (D37)', () => {
+    const policyFiles = fs.readdirSync(POLICIES_DIR).filter((f) => f.endsWith('.xml'));
+    const strip = (xml) => xml.replace(/<!--[\s\S]*?-->/g, '');
+
+    it('no policy uses client_id (or the key header) as an <Identifier>', () => {
+      let count = 0;
+      policyFiles.forEach((f) => {
+        const xml = strip(fs.readFileSync(path.join(POLICIES_DIR, f), 'utf8'));
+        const ids = xml.match(/<Identifier\b[^>]*>(?:[^<]*<\/Identifier>)?/g) || [];
+        ids.forEach((id) => {
+          count += 1;
+          expect(id, f).to.not.match(/client_id|x-api-key|apikey|client_secret/i);
+        });
+      });
+      expect(count, 'identifiers found').to.be.greaterThan(0);
+    });
+
+    it('SpikeArrest and Quota both identify the app by custom.rateIdentifier', () => {
+      ['SA-SpikeArrest.xml', 'Q-ImposeQuota.xml'].forEach((f) => {
+        const xml = strip(fs.readFileSync(path.join(POLICIES_DIR, f), 'utf8'));
+        expect(xml, f).to.match(/<Identifier ref="custom\.rateIdentifier"\s*\/>/);
+      });
+    });
+
+    it('AM-SetRateIdentifier builds it from developer email + app name, not from any credential', () => {
+      const xml = strip(fs.readFileSync(path.join(POLICIES_DIR, 'AM-SetRateIdentifier.xml'), 'utf8'));
+      const m = /<Name>custom\.rateIdentifier<\/Name>\s*<Template>([^<]+)<\/Template>/.exec(xml);
+      expect(m, 'template').to.not.equal(null);
+      expect(m[1]).to.equal('{verifyapikey.VA-VerifyApiKey.developer.email}/{verifyapikey.VA-VerifyApiKey.developer.app.name}');
+      // 'verifyapikey' is the policy prefix; look for credentials and the unstable ID variables.
+      expect(m[1]).to.not.match(/client_id|client_secret|request\.|developer\.id\}|app\.id\}/i);
+    });
+
+    it('AM-SetRateIdentifier runs after the key/secret checks and before SpikeArrest and Quota', () => {
+      const flow = strip(fs.readFileSync(path.join(BUNDLE, 'proxies', 'default.xml'), 'utf8'));
+      const at = (n) => flow.indexOf(`<Name>${n}</Name>`);
+      expect(at('RF-InvalidSecret')).to.be.greaterThan(-1);
+      expect(at('RF-InvalidSecret')).to.be.lessThan(at('AM-SetRateIdentifier'));
+      expect(at('AM-SetRateIdentifier')).to.be.lessThan(at('SA-SpikeArrest'));
+      expect(at('SA-SpikeArrest')).to.be.lessThan(at('Q-ImposeQuota'));
+    });
+  });
 });

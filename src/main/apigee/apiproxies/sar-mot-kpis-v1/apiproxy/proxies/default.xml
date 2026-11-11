@@ -98,6 +98,9 @@
         <Condition>custom.secretValid != "true"</Condition>
       </Step>
       <Step>
+        <Name>AM-SetRateIdentifier</Name>
+      </Step>
+      <Step>
         <Name>SA-SpikeArrest</Name>
       </Step>
       <Step>

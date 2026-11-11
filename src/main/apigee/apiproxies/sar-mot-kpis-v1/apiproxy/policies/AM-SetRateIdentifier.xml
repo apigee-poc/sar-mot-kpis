@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-SetRateIdentifier">
+  <DisplayName>AM-SetRateIdentifier</DisplayName>
+  <!--
+    Per-app identifier for SA-SpikeArrest and Q-ImposeQuota that is NOT a credential (D37).
+    Using verifyapikey.*.client_id put the raw API key into ratelimit.*.identifier and into
+    the SpikeArrest bucket key shown in debug sessions.
+    Developer email + app name: an app name is unique within its developer, so two apps
+    always differ. Both values are stable, unlike developer.id / developer.app.id, which the
+    VerifyAPIKey docs say must not be used for quota identifiers because they may change.
+    Runs right after VA-VerifyApiKey / RF-InvalidSecret, so both values are resolved.
+  -->
+  <AssignVariable>
+    <Name>custom.rateIdentifier</Name>
+    <Template>{verifyapikey.VA-VerifyApiKey.developer.email}/{verifyapikey.VA-VerifyApiKey.developer.app.name}</Template>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>
