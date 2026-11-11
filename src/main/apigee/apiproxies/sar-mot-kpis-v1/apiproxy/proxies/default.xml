@@ -129,6 +129,11 @@
           <Condition>(request.queryparam.quarter != null) and !(request.queryparam.quarter JavaRegex "[1-4]")</Condition>
         </Step>
         <Step>
+          <!-- "quarter=" present but empty: 400, independent of how Apigee treats an empty param -->
+          <Name>RF-InvalidQueryParams</Name>
+          <Condition>request.querystring JavaRegex "(.*&amp;)?quarter=(&amp;.*)?"</Condition>
+        </Step>
+        <Step>
           <Name>SIR-SetIntegrationRequest</Name>
         </Step>
         <Step>
