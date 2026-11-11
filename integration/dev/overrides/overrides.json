@@ -14,8 +14,7 @@
       "taskId": "2",
       "task": "GenericConnectorTask",
       "parameters": {
-        "connectionName": "sar-kpi-db-dev",
-        "connectionLocation": "us-central1"
+        "connectionName": "sar-kpi-db-dev"
       }
     }
   ],

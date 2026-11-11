@@ -38,10 +38,30 @@ const buildScript = task(integration, '1').parameters.script.value.stringValue;
 const transformScript = task(integration, '3').parameters.script.value.stringValue;
 
 describe('integration sar-kpi-get: structure', () => {
-  it('dev and staging src files are byte-identical (env differences live in overrides only)', () => {
-    const dev = fs.readFileSync(path.join(ROOT, srcFile('dev')));
-    const staging = fs.readFileSync(path.join(ROOT, srcFile('staging')));
-    expect(dev.equals(staging)).to.equal(true);
+  it('dev and staging src files are identical except the env connection and trigger', () => {
+    // Replace every env-specific token with a placeholder; what remains must be identical.
+    const normalise = (env) => fs.readFileSync(path.join(ROOT, srcFile(env)), 'utf8')
+      .replace(/\r\n/g, '\n')
+      .split(`sar-kpi-db-${env}`).join('sar-kpi-db-<env>')
+      .split(`sar-kpi-get-${env}`).join('sar-kpi-get-<env>');
+    expect(normalise('dev')).to.equal(normalise('staging'));
+  });
+
+  it('each env src and override reference only that env connection and trigger', () => {
+    ENVS.forEach((env) => {
+      const other = ENVS.find((e) => e !== env);
+      const src = readJson(srcFile(env));
+      const srcText = fs.readFileSync(path.join(ROOT, srcFile(env)), 'utf8');
+      const overridesText = fs.readFileSync(path.join(ROOT, env, 'overrides', 'overrides.json'), 'utf8');
+      const cfg = JSON.parse(task(src, '2').parameters.config.value.jsonValue);
+      expect(cfg.connection.connectionName)
+        .to.equal(`projects/apigee-nonprod-511322/locations/us-central1/connections/sar-kpi-db-${env}`);
+      expect(src.triggerConfigs[0].triggerId).to.equal(`api_trigger/sar-kpi-get-${env}`);
+      [srcText, overridesText].forEach((text) => {
+        expect(text).to.not.contain(`sar-kpi-db-${other}`);
+        expect(text).to.not.contain(`sar-kpi-get-${other}`);
+      });
+    });
   });
 
   it('each env src folder has exactly one integration JSON (apply uses the first file)', () => {
@@ -62,7 +82,7 @@ describe('integration sar-kpi-get: structure', () => {
       expect(o.connection_overrides).to.deep.equal([{
         taskId: '2',
         task: 'GenericConnectorTask',
-        parameters: { connectionName: `sar-kpi-db-${env}`, connectionLocation: 'us-central1' }
+        parameters: { connectionName: `sar-kpi-db-${env}` }
       }]);
       expect(o.trigger_overrides[0].apiPath).to.equal(`sar-kpi-get-${env}`);
     });

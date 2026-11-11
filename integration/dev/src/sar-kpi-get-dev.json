@@ -9,11 +9,11 @@
         }
       ],
       "properties": {
-        "Trigger name": "sar-kpi-get"
+        "Trigger name": "sar-kpi-get-dev"
       },
       "triggerType": "API",
       "triggerNumber": "1",
-      "triggerId": "api_trigger/sar-kpi-get",
+      "triggerId": "api_trigger/sar-kpi-get-dev",
       "inputVariables": {
         "names": [
           "kpiCode",
@@ -161,6 +161,7 @@
       "key": "`Task_2_connectorInputPayload`",
       "dataType": "JSON_VALUE",
       "displayName": "`Task_2_connectorInputPayload`",
+      "isTransient": true,
       "producer": "1_2"
     },
     {

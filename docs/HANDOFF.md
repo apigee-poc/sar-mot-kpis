@@ -72,9 +72,7 @@ d:\apigee\sar-mot-kpis\
 ```
 
 **Missing (needed for P4–P9):**
-- `integration/src/sar-kpi-get.json`
-- `integration/overrides/<env>/overrides.json`
-- `integration/test-cases/`
+- `integration/<env>/{src,overrides,tests,test-configs}` — added in P4 (see "integrationcli folder layout")
 - `infra/05-apigee-products-apps.sh`
 - Full proxy policies in `src/main/apigee/apiproxies/sar-mot-kpis-v1/apiproxy/`
 - `src/main/apigee/environments/<env>/kvms/`
@@ -82,8 +80,7 @@ d:\apigee\sar-mot-kpis\
 - `tests/sar-mot-kpis.postman_collection.json`
 - `tests/<env>.postman_environment.json`
 - `cloudbuild-infra.yaml`, `cloudbuild-pr.yaml`, `cloudbuild-main.yaml`, `cloudbuild-prod.yaml`
-- `scripts/get-published-integration-version.sh`
-- `scripts/rollback-integration.sh`
+- `scripts/get-published-integration-version.sh`, `scripts/rollback-integration.sh` — added in P4
 
 ---
 
@@ -134,24 +131,34 @@ d:\apigee\sar-mot-kpis\
 - Always pass `-t $(gcloud auth print-access-token)` (PowerShell: `$token = gcloud auth print-access-token; integrationcli ... -t $token`)
 - SA flag is `--sa` (not `-s`); value is short name without `@project.iam.gserviceaccount.com`
 
-### integrationcli folder layout (verified)
+### integrationcli folder layout (verified against v0.86.0 source — D20, D21)
+One apply root per env, applied with `-f ./integration/<env>` and **no `-e`**:
 ```
 integration/
-├── src/<name>.json              # integration definition
-├── overrides/<env>/overrides.json
-├── connectors/<name>.json
-└── test-cases/
+├── connectors/sar-kpi-db-<env>.json        # P3, applied separately (--skip-connectors=true)
+└── <env>/                                  # dev | staging (| prod in P8)
+    ├── src/sar-kpi-get-<env>.json          # exactly one file; file name = integration name
+    ├── overrides/overrides.json            # connection + trigger again (defence in depth)
+    ├── tests/<name>.json                   # TestCase definitions (displayName = <name>)
+    └── test-configs/<name>.json            # executeTest bodies {"inputParameters": {...}}
 ```
+- With `-e E`, apply reads `src` from `F/src` (shared) and everything else from `F/E/`; it keeps
+  only the first `*.json` under `src/` and names the integration after it, so a shared src cannot
+  produce per-env names. Overrides cannot rename an integration.
+- `--run-tests=true` fails if `test-configs/` is missing.
+- **`--userlabel` is silently ignored** in v0.86.0 (registered `userlabel`, read as `user-label`).
+  Stamp `"userLabel"` into a temp copy of the src JSON instead (D23; see deploy commands).
+- Do not commit `src/javascript/*.js` from a scaffold: apply would replace the inline scripts with them.
 
 ---
 
 ## P4 — Application Integration (next phase)
 
 ### What to build
-Integration `sar-kpi-get` with:
-- **API trigger:** `api_trigger/sar-kpi-get`
+Integrations `sar-kpi-get-dev` and `sar-kpi-get-staging` (source: `integration/<env>/src/`) with:
+- **API trigger:** `api_trigger/sar-kpi-get-<env>` (per env, D22)
 - **Input parameters:** `kpiCode` (STRING), `year` (INT), `quarter` (INT, nullable — 0 means absent)
-- **Output parameter:** `data` (JSON_VALUE)
+- **Output parameter:** `data` (JSON_VALUE, default `[]`)
 
 ### SQL query (task: ExecuteCustomQuery)
 ```sql
@@ -162,77 +169,76 @@ WHERE kpi_code = ?
   AND (CAST(? AS SMALLINT) IS NULL OR quarter = ?)
 ORDER BY quarter
 ```
-Query parameters: `[kpiCode VARCHAR, year INT, quarter INT, quarter INT]`
+Query parameters: `[kpiCode VARCHAR, year INTEGER, quarter INTEGER, quarter INTEGER]`, quarter 0 sent as `null` (D24). `INT` is not a connector data type.
 
-### Task flow
-1. **`DM-BuildConnectorInput`** (FieldMappingTask) — build the `connectorInputPayload` JSON
-2. **`CON-QueryKpiRecords`** (GenericConnectorTask) — `EXECUTE_ACTION / ExecuteCustomQuery`  
-   Connection: `projects/apigee-nonprod-511322/locations/us-central1/connections/sar-kpi-db-dev` (overridden per env)
-3. **`JS-TransformOutput`** (JavaScriptTask) — map rows to OAS shape:
-   ```javascript
-   function executeScript(event) {
-     var raw = event.getParameter('Task_2_connectorOutputPayload');
-     var rows = JSON.parse(raw || '[]');
-     var result = rows.map(function(r) {
-       return {
-         quarter: r.quarter,
-         year: r.year,
-         actual: parseFloat(r.actual),
-         loadTime: new Date(r.load_time).toISOString().replace(/\.\d{3}Z$/, 'Z')
-       };
-     });
-     event.setParameter('data', JSON.stringify(result));
-   }
-   ```
+### Task flow (D24)
+1. **`JS-BuildConnectorInput`** (JavaScriptTask) — builds `` `Task_2_connectorInputPayload` `` =
+   `{query, queryParameters:[{value,dataType}], timeout: 30, maxRows: 10}`, quarter 0 → `null`.
+   (Data Mapping cannot express the conditional NULL.)
+2. **`CON-QueryKpiRecords`** (GenericConnectorTask) — `EXECUTE_ACTION / ExecuteCustomQuery`.
+   Each env's src hard-codes `projects/apigee-nonprod-511322/locations/us-central1/connections/sar-kpi-db-<env>`;
+   the override sets it again.
+3. **`JS-TransformOutput`** (JavaScriptTask) — reads `` `Task_2_connectorOutputPayload` ``
+   (auto-generated variables need backticks), maps rows to `KpiRecord` (`Number()` for numbers,
+   `load_time` → `YYYY-MM-DDTHH:MM:SSZ`), sets `data` to an array (`[]` when no rows), throws on
+   bad input. The scripts live inline in the src JSON and are unit-tested in
+   `tests/unit/integration-sar-kpi-get.test.js`.
+
+All three tasks use `failurePolicy` and `synchronousCallFailurePolicy` `FATAL`.
 
 ### Overrides files
-`integration/overrides/dev/overrides.json`:
+`integration/<env>/overrides/overrides.json` (dev shown; staging uses `-staging`):
 ```json
 {
-  "task_overrides": [],
-  "connection_overrides": [
-    {
-      "taskId": "2",
-      "task": "GenericConnectorTask",
-      "parameters": { "connectionName": "sar-kpi-db-dev" }
-    }
+  "trigger_overrides": [
+    { "triggerNumber": "1", "triggerType": "API", "apiPath": "sar-kpi-get-dev",
+      "properties": { "Trigger name": "sar-kpi-get-dev" } }
   ],
-  "param_overrides": [],
+  "connection_overrides": [
+    { "taskId": "2", "task": "GenericConnectorTask",
+      "parameters": { "connectionName": "sar-kpi-db-dev" } }
+  ],
   "integration_overrides": {
     "databasePersistencePolicy": "DATABASE_PERSISTENCE_POLICY_UNSPECIFIED",
-    "enableVariableMasking": false
+    "enableVariableMasking": false,
+    "cloudLoggingDetails": { "cloudLoggingSeverity": "CLOUD_LOGGING_SEVERITY_UNSPECIFIED", "enableCloudLogging": false }
   }
 }
 ```
-`integration/overrides/staging/overrides.json` — same but `connectionName: sar-kpi-db-staging`.
 
-### Test cases (integration/test-cases/)
+### Test cases (integration/<env>/tests/ + integration/<env>/test-configs/, same file names)
 | File | kpiCode | year | quarter | Expected rows |
 |---|---|---|---|---|
-| `test-2025-full-year.json` | total_freight | 2025 | null | 3 rows |
+| `test-2025-full-year.json` | total_freight | 2025 | 0 (all) | 3 rows |
 | `test-2025-q3.json` | total_freight | 2025 | 3 | 1 row (actual=1512750) |
-| `test-2026-empty.json` | total_freight | 2026 | null | 0 rows (`data: []`) |
-| `test-2024-full-year.json` | total_freight | 2024 | null | 4 rows |
+| `test-2026-empty.json` | total_freight | 2026 | 0 (all) | 0 rows (`data: []`) |
+| `test-2024-full-year.json` | total_freight | 2024 | 0 (all) | 4 rows |
 
 ### Deploy commands (PowerShell)
+`--userlabel` is ignored by integrationcli v0.86.0 (D23), so the label is stamped into a temp copy
+of each env's apply root, which is then applied **without `-e`** (D20).
 ```powershell
 $SHORT_SHA = git rev-parse --short HEAD
 $token = gcloud auth print-access-token
 
-# dev
-integrationcli integrations apply -f ./integration -e dev `
-  --userlabel=$SHORT_SHA --skip-connectors=true --wait=true --run-tests=true `
-  -p apigee-nonprod-511322 -r us-central1 -t $token
-
-# staging
-integrationcli integrations apply -f ./integration -e staging `
-  --userlabel=$SHORT_SHA --skip-connectors=true --wait=true --run-tests=true `
-  -p apigee-nonprod-511322 -r us-central1 -t $token
+foreach ($e in 'dev', 'staging') {
+  $tmp = Join-Path $env:TEMP "sar-kpi-apply-$e"
+  if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
+  Copy-Item -Recurse ./integration/$e $tmp
+  node -e "const f=process.argv[1];const j=JSON.parse(require('fs').readFileSync(f,'utf8'));j.userLabel=process.argv[2];require('fs').writeFileSync(f,JSON.stringify(j,null,2))" "$tmp/src/sar-kpi-get-$e.json" $SHORT_SHA
+  integrationcli integrations apply -f $tmp `
+    --skip-connectors=true --wait=true --run-tests=true `
+    -p apigee-nonprod-511322 -r us-central1 -t $token
+}
 ```
+After apply, check that the published version's task 2 `connectionName` ends in `sar-kpi-db-<env>`
+and its `userLabel` is the SHORT_SHA.
 
 ### New scripts required for P4
-- `scripts/get-published-integration-version.sh` — mirrors `get-deployed-revision.sh`
-- `scripts/rollback-integration.sh` — mirrors `rollback.sh`
+- `scripts/get-published-integration-version.sh` — mirrors `get-deployed-revision.sh` (records the ACTIVE version before apply)
+- `scripts/rollback-integration.sh` — mirrors `rollback.sh`, but an ARCHIVED version cannot be
+  re-published: it copies the previous version's content into a **new draft** and publishes that;
+  with no previous version it unpublishes the failed one (D25)
 
 ### P4 Acceptance checks
 - [ ] Both integrations published, label = SHORT_SHA
@@ -254,7 +260,7 @@ See `docs/PLAN.md` lines 210–232 for the full table. Key policies:
 | Policy | Type | Purpose |
 |---|---|---|
 | `AM-SetTraceAndTimestamp` | AssignMessage | Set `custom.traceId = messageid`, `custom.timestamp` = ISO-8601 UTC |
-| `KVM-GetConfig` | KeyValueMapOperations | Read from `sar-mot-kpis-config-__KVM_VERSION__` |
+| `KVM-GetConfig` | KeyValueMapOperations | Read from `sar-mot-kpis-config-__KVM_VERSION__` (incl. per-env integration name + trigger name) |
 | `RF-InvalidRequestId` | RaiseFault | Missing or non-UUID X-Request-Id → ERR-400-REQUESTID |
 | `AM-SetClientTraceId` | AssignMessage | Overwrite `custom.traceId` with `X-Request-Id` header |
 | `VA-VerifyApiKey` | VerifyAPIKey | Verify `request.header.x-api-key` |
@@ -266,7 +272,7 @@ See `docs/PLAN.md` lines 210–232 for the full table. Key policies:
 | `RF-InvalidOperatorId` | RaiseFault | Regex `^[12]\d{9}$` → ERR-400-OPERATOR |
 | `RF-InvalidQueryParams` | RaiseFault | year/quarter validation → ERR-400-PARAMS |
 | `AM-SetKpiCode` | AssignMessage | Set `kpi.code = total_freight` |
-| `SIR-SetIntegrationRequest` | SetIntegrationRequest | Integration name/project/region from KVM |
+| `SIR-SetIntegrationRequest` | SetIntegrationRequest | Integration name, trigger name (`api_trigger/sar-kpi-get-<env>`, D22), project, region from KVM |
 | `RF-IntegrationError` | RaiseFault | Non-2xx from integration → ERR-500-INTEGRATION |
 | `EV-ExtractIntegrationOutput` | ExtractVariables | JSONPath to `data` output param |
 | `RF-BadGateway` | RaiseFault | Missing/non-array/too-many items → ERR-502-GATEWAY |

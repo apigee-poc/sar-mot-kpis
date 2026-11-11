@@ -9,11 +9,11 @@
         }
       ],
       "properties": {
-        "Trigger name": "sar-kpi-get"
+        "Trigger name": "sar-kpi-get-staging"
       },
       "triggerType": "API",
       "triggerNumber": "1",
-      "triggerId": "api_trigger/sar-kpi-get",
+      "triggerId": "api_trigger/sar-kpi-get-staging",
       "inputVariables": {
         "names": [
           "kpiCode",
@@ -62,7 +62,7 @@
         "config": {
           "key": "config",
           "value": {
-            "jsonValue": "{\n  \"@type\": \"type.googleapis.com/enterprise.crm.eventbus.proto.connectors.GenericConnectorTaskConfig\",\n  \"connection\": {\n    \"connectionName\": \"projects/apigee-nonprod-511322/locations/us-central1/connections/sar-kpi-db-dev\",\n    \"serviceName\": \"projects/ef911070c468726ff-tp/locations/us-central1/namespaces/connectors/services/runtime\",\n    \"connectorVersion\": \"projects/apigee-nonprod-511322/locations/global/providers/default/connectors/postgresql/versions/1\"\n  },\n  \"operation\": \"EXECUTE_ACTION\"\n}"
+            "jsonValue": "{\n  \"@type\": \"type.googleapis.com/enterprise.crm.eventbus.proto.connectors.GenericConnectorTaskConfig\",\n  \"connection\": {\n    \"connectionName\": \"projects/apigee-nonprod-511322/locations/us-central1/connections/sar-kpi-db-staging\",\n    \"serviceName\": \"projects/ef911070c468726ff-tp/locations/us-central1/namespaces/connectors/services/runtime\",\n    \"connectorVersion\": \"projects/apigee-nonprod-511322/locations/global/providers/default/connectors/postgresql/versions/1\"\n  },\n  \"operation\": \"EXECUTE_ACTION\"\n}"
           }
         },
         "actionName": {
@@ -161,6 +161,7 @@
       "key": "`Task_2_connectorInputPayload`",
       "dataType": "JSON_VALUE",
       "displayName": "`Task_2_connectorInputPayload`",
+      "isTransient": true,
       "producer": "1_2"
     },
     {

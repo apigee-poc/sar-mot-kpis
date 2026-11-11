@@ -37,11 +37,13 @@ sar-mot-kpis/
 │   ├── migrations/V001__create_kpi_records.sql
 │   ├── seed/total_freight.sql                 # idempotent mock data
 │   └── load.sh                                # upload to GCS + gcloud sql import sql
-├── integration/                               # integrationcli scaffold layout
-│   ├── src/sar-kpi-get.json
-│   ├── connectors/ (or <env>/connectors/)     # follow scaffold output
-│   ├── overrides/<env>/overrides.json         # dev | staging | prod
-│   └── test-cases/
+├── integration/                               # one integrationcli apply root per env (D20)
+│   ├── connectors/sar-kpi-db-<env>.json
+│   └── <env>/                                 # dev | staging | prod
+│       ├── src/sar-kpi-get-<env>.json         # file name = integration name (D21)
+│       ├── overrides/overrides.json
+│       ├── tests/                             # TestCase definitions
+│       └── test-configs/                      # executeTest bodies, same file names
 ├── src/main/apigee/
 │   ├── apiproxies/sar-mot-kpis-v1/{pom.xml, apiproxy/...}
 │   ├── environments/<local|dev|staging|prod>/kvms/{sar-mot-kpis-config,sar-mot-kpis-errors}.json
@@ -172,7 +174,7 @@ tester or a throwaway integration returns the seed rows for its own database onl
 **Goal:** `sar-kpi-get-dev` and `sar-kpi-get-staging`, published from the repo.
 
 1. Design once (👤 the Console editor is fine for the first version). The integration has:
-   - API trigger `api_trigger/sar-kpi-get`
+   - API trigger `api_trigger/sar-kpi-get-<env>` (per env, D22)
    - Inputs: `kpiCode` (string), `year` (int), `quarter` (int, nullable)
    - Connectors task on `sar-kpi-db-<env>`, action **Execute custom query**:
      ```sql
@@ -180,20 +182,31 @@ tester or a throwaway integration returns the seed rows for its own database onl
      WHERE kpi_code = ? AND year = ? AND (CAST(? AS SMALLINT) IS NULL OR quarter = ?)
      ORDER BY quarter
      ```
-   - Data Mapping into output `data` (JSON array of `KpiRecord`): `load_time` → `loadTime` as
+   - Task 1 `JS-BuildConnectorInput` (JavaScript, D24) builds the query input (quarter 0 →
+     NULL); task 3 `JS-TransformOutput` (JavaScript) maps the rows into output `data` (JSON array of `KpiRecord`): `load_time` → `loadTime` as
      ISO-8601 UTC `YYYY-MM-DDTHH:MM:SSZ`, `actual` as a number, and `[]` (never null) when
      there are no rows.
    - On task failure, end with an error so Apigee sees a non-2xx response. No partial data.
-2. Pull it into the repo: `integrationcli integrations scaffold -n sar-kpi-get-dev --latest -f integration -e dev`.
-   Normalise names so one `src/sar-kpi-get.json` plus per-env overrides
-   (`overrides/<env>/overrides.json`) produce `sar-kpi-get-<env>` bound to `sar-kpi-db-<env>`.
-3. Integration test cases in `integration/test-cases/`: full year 2025 (3 rows), quarter 3
-   (1 row), 2026 (0 rows), 2024 (4 rows).
-4. Publish dev with `integrationcli integrations apply --env=dev --folder=integration
-   --userlabel=<SHORT_SHA> --wait=true --run-tests=true`, then staging the same way.
+2. Keep it in the repo as one apply root per env (D20, D21):
+   `integration/<env>/src/sar-kpi-get-<env>.json` (the file name is the integration name; each
+   file hard-codes its own `sar-kpi-db-<env>` connection and trigger),
+   `integration/<env>/overrides/overrides.json` (connection + trigger again, defence in depth).
+   The dev and staging src files differ only in those values (unit-tested). To compare with
+   the service, `integrationcli integrations scaffold -n sar-kpi-get-dev --latest -f <tmp> -e dev`
+   and diff; do not commit the scaffolded `src/javascript/*.js` (apply would override the inline
+   scripts with them).
+3. Integration test cases in `integration/<env>/tests/` (TestCase definitions) with matching
+   `integration/<env>/test-configs/` (`executeTest` bodies, same file names): full year 2025
+   (3 rows), quarter 3 (1 row), 2026 (0 rows), 2024 (4 rows).
+4. Publish dev with `integrationcli integrations apply -f ./integration/dev --skip-connectors=true
+   --wait=true --run-tests=true -p apigee-nonprod-511322 -r us-central1` (**no `-e`**), then
+   staging the same way with `./integration/staging`. `--userlabel` is ignored by integrationcli
+   v0.86.0 (D23): stamp `"userLabel": "<SHORT_SHA>"` into a temp copy of the env's apply root and
+   apply the copy.
 5. Add `scripts/get-published-integration-version.sh` and `scripts/rollback-integration.sh`.
-   These record the published version before apply and re-publish it on failure, mirroring
-   `get-deployed-revision.sh` / `rollback.sh`.
+   These record the published version before apply and, on failure, restore that version's
+   content as a new draft and publish it (D25; ARCHIVED versions cannot be re-published),
+   mirroring `get-deployed-revision.sh` / `rollback.sh`.
 
 **Acceptance:** both integrations are published with the commit SHA as label; test cases
 pass; executing via API returns `data` in the exact OAS shape.
@@ -210,7 +223,7 @@ identifiers, stamped by the pipeline.
 | Stage | Policy | Purpose |
 |---|---|---|
 | PreFlow req | `AM-SetTraceAndTimestamp` | `custom.traceId = messageid`; `custom.timestamp` = ISO-8601 UTC (e.g. `timeFormatUTCMs` in a message template; VERIFY exact syntax in the emulator) |
-| | `KVM-GetConfig` | `sar-mot-kpis-config-__KVM_VERSION__`: integrationName, projectId, region, spikeArrestRate, quotaLimit, quotaInterval, quotaTimeUnit, maxClockSkewSeconds, allowedKpis |
+| | `KVM-GetConfig` | `sar-mot-kpis-config-__KVM_VERSION__`: integrationName, triggerName (`api_trigger/sar-kpi-get-<env>`, D22), projectId, region, spikeArrestRate, quotaLimit, quotaInterval, quotaTimeUnit, maxClockSkewSeconds, allowedKpis |
 | | `RF-InvalidRequestId` | missing or not a UUID → `ERR-400-REQUESTID` |
 | | `AM-SetClientTraceId` | `custom.traceId = request.header.X-Request-Id` |
 | | `VA-VerifyApiKey` | `request.header.x-api-key` |
@@ -220,7 +233,7 @@ identifiers, stamped by the pipeline.
 | | `RF-InvalidOperatorId` | `^[12]\d{9}$` → `ERR-400-OPERATOR` |
 | Flow `GetTotalFreight` (`/kpis/total_freight`, GET) | `RF-InvalidQueryParams` | year `^20\d{2}$`; quarter empty or `^[1-4]$` → `ERR-400-PARAMS` |
 | | `AM-SetKpiCode` | `kpi.code = total_freight` |
-| | `SIR-SetIntegrationRequest` | name, project and region read via `ref` from the KVM; parameters `kpiCode`, `year`, `quarter` (omit quarter when absent) |
+| | `SIR-SetIntegrationRequest` | name, trigger name, project and region read via `ref` from the KVM; parameters `kpiCode`, `year`, `quarter` (omit quarter when absent) |
 | resp | `RF-IntegrationError` | status ≠ 2xx → `ERR-500-INTEGRATION` |
 | | `EV-ExtractIntegrationOutput` | JSONPath to the `data` output parameter (VERIFY the response shape with a debug session) |
 | | `RF-BadGateway` | output missing, not an array, or > 4 items → `ERR-502-GATEWAY` |
@@ -285,8 +298,8 @@ All in Cloud Build, project `ci-cd-511313`, same triggers and service accounts a
   2. lint + unit tests
   3. `db/load.sh dev` (expand-only migrations + seed)
   4. connections apply for dev (no-op if unchanged)
-  5. record the published integration version → `integrationcli integrations apply --env=dev
-     --run-tests=true` (using the `integrationcli-builder` image) → roll back the integration on
+  5. record the published integration version → `integrationcli integrations apply
+     -f <copy of integration/dev with userLabel stamped> --run-tests=true` (D20, D23) (using the `integrationcli-builder` image) → roll back the integration on
      failure
   6. record the dev proxy revision → create versioned KVMs → deploy proxy with runtime SA →
      wait → Newman dev → on failure roll back **proxy, then integration**
@@ -340,6 +353,6 @@ promotion.
 3. Exact response shape of an IntegrationEndpoint target, i.e. where `data` sits (P5).
 4. Default HTTP statuses of VerifyAPIKey / SpikeArrest / Quota faults (P5).
 5. Message-template syntax for the ISO timestamp (P5).
-6. `integrationcli` folder layout and flags for the installed version (P4).
+6. `integrationcli` folder layout and flags for the installed version (P4). Resolved: D20–D23.
 7. Whether the Apigee emulator can run anything integration-related. Assume not; mock-free
    local tests cover error paths only (P6).
