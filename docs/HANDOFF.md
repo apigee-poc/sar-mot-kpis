@@ -17,7 +17,7 @@
 | P4 | Application Integration | ✅ DONE | `3400476` |
 | P5 | Apigee proxy | ✅ DONE | `80ad235` |
 | P6 | Tests (unit, Newman, integration) | ✅ DONE `6919831` | Suite green on dev rev 7 (24 req / 260 assertions); rows 6, 7, 13, 16 verified on scratch revs 8-11 (D45, D46); rows 14/15 waived (D44); V3/V9 in D46 |
-| P7 | CI/CD pipelines (PR + non-prod) | ⏳ TODO | — |
+| P7 | CI/CD pipelines (PR + non-prod) | 🔍 IN REVIEW | Pipelines and scripts written and statically tested (D48–D53). Triggers not created: no git remote yet (DEPLOYMENT.md "CI/CD triggers (not created yet)") |
 | P8 | Prod foundation + prod pipeline | ⏳ TODO | — |
 | P9 | Documentation + acceptance demo | ⏳ TODO | — |
 
@@ -326,8 +326,13 @@ See the policy table in `docs/PLAN.md` section "P5 — Apigee proxy" for the ful
 **P7 — CI/CD**
 - `cloudbuild-infra.yaml` (manual, runs `infra/0*.sh`)
 - `cloudbuild-pr.yaml` (validate: lint + unit + OAS lint + Maven package)
-- `cloudbuild-main.yaml` (deploy: stamp KVM version → lint → db/load → connectors → integration → proxy → Newman; rollback on failure; promote same revision to staging)
+- `cloudbuild-main.yaml` (deploy: lint + unit tests on the unstamped tree → stamp → db/load → integration apply/assert → debug mask → KVMs → proxy (runtime SA checked) → Newman; on failure roll back the proxy, then the integration; staging promotes the same revision) — D51, D52
 - All in project `ci-cd-511313` using existing `cb-validate`, `cb-deploy-nonprod` SAs
+- **State (2026-11-12):** written and statically tested (`tests/unit/pipelines.test.js`,
+  `tests/unit/pipeline-scripts.test.js`). 👤 Next: create the GitHub repo `apigee-poc/sar-mot-kpis`,
+  add it as `origin` and push, connect it to Cloud Build, run the trigger commands in
+  `docs/DEPLOYMENT.md` ("CI/CD triggers (not created yet)"), then do the acceptance run (green merge, and a
+  broken-test commit that rolls dev back) — D53.
 
 **P8 — Prod**
 - 👤 Provision App Integration in prod project `apigee-prod-511508`

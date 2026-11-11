@@ -13,7 +13,7 @@ Agents update the status line of a phase when they start or finish it.
 | P4 | Application Integration | DONE (3400476) |
 | P5 | Apigee proxy | DONE (80ad235) |
 | P6 | Tests (unit, Newman, integration tests) | DONE (6919831) |
-| P7 | CI/CD pipelines (PR + non-prod) | TODO |
+| P7 | CI/CD pipelines (PR + non-prod) | IN REVIEW (pipelines written and statically tested; triggers and the first real run pending, D53) |
 | P8 | Prod foundation + prod pipeline | TODO |
 | P9 | Documentation + acceptance demo | TODO |
 
@@ -347,8 +347,9 @@ All in Cloud Build, project `ci-cd-511313`, same triggers and service accounts a
 - `cloudbuild-pr.yaml` (`cb-validate`, no cloud access): `npm ci` → apigeelint → unit tests →
   OAS lint (e.g. `@redocly/cli lint`) → integration JSON validation → Maven package.
 - `cloudbuild-main.yaml` (`cb-deploy-nonprod`), on push to `main`:
-  1. stamp commit + KVM version (as in `cicd-workspace`)
-  2. lint + unit tests
+  1. `npm ci`, lint + unit tests on the **unstamped** tree (a stamped tree fails the
+     `kvm-contract` tests, D51)
+  2. stamp commit + KVM version (`scripts/stamp-commit.sh`, as in `cicd-workspace`)
   3. `db/load.sh dev` (expand-only migrations + seed)
   4. connections apply for dev (no-op if unchanged)
   5. record the published integration version, then (with the `integrationcli-builder` image)
@@ -371,6 +372,16 @@ All in Cloud Build, project `ci-cd-511313`, same triggers and service accounts a
 
 **Acceptance:** a merge to `main` reaches staging green. A commit with a broken test rolls
 dev back and staging is untouched.
+
+**Implemented (2026-11-12, offline):** `cloudbuild-pr.yaml`, `cloudbuild-main.yaml`,
+`cloudbuild-infra.yaml` (nonprod only; refuses `_TARGET=prod`), the helper scripts
+(`stamp-commit`, `install-integrationcli`, `apply-integration`, `assert-integration`,
+`deploy-debugmask`, `assert-proxy-runtime-sa`, `lib/python.sh`), the carry-over fixes I-3, M-4 and M-5,
+and the static tests `tests/unit/pipeline-scripts.test.js` and `tests/unit/pipelines.test.js`
+(D48–D53). Step 4 (connections apply) is not a pipeline step: the connections are created by P3/infra
+and integrationcli runs with `--skip-connectors=true`. **Pending (👤):** GitHub remote, Cloud Build
+connection and triggers (DEPLOYMENT.md "CI/CD triggers (not created yet)"), then the acceptance
+run above (D53).
 
 **P7 carry-over from P4 final review (no code yet):**
 - I-3: `scripts/get-published-integration-version.sh` fails open. It must exit non-zero on
