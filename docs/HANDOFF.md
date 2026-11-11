@@ -16,7 +16,7 @@
 | P3 | Integration Connector (private) | ✅ DONE | `8987442` |
 | P4 | Application Integration | ✅ DONE | `3400476` |
 | P5 | Apigee proxy | ✅ DONE | `80ad235` |
-| P6 | Tests (unit, Newman, integration) | 🔎 IN REVIEW | Suite green on dev rev 7 (24 req / 260 assertions); rows 6, 7, 13, 16 verified on scratch revs 8-11 (D45, D46); rows 14/15 waived (D44); V3/V9 in D46 |
+| P6 | Tests (unit, Newman, integration) | ✅ DONE `6919831` | Suite green on dev rev 7 (24 req / 260 assertions); rows 6, 7, 13, 16 verified on scratch revs 8-11 (D45, D46); rows 14/15 waived (D44); V3/V9 in D46 |
 | P7 | CI/CD pipelines (PR + non-prod) | ⏳ TODO | — |
 | P8 | Prod foundation + prod pipeline | ⏳ TODO | — |
 | P9 | Documentation + acceptance demo | ⏳ TODO | — |

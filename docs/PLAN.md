@@ -12,7 +12,7 @@ Agents update the status line of a phase when they start or finish it.
 | P3 | Integration Connector (private) | DONE (8987442) |
 | P4 | Application Integration | DONE (3400476) |
 | P5 | Apigee proxy | DONE (80ad235) |
-| P6 | Tests (unit, Newman, integration tests) | IN REVIEW |
+| P6 | Tests (unit, Newman, integration tests) | DONE (6919831) |
 | P7 | CI/CD pipelines (PR + non-prod) | TODO |
 | P8 | Prod foundation + prod pipeline | TODO |
 | P9 | Documentation + acceptance demo | TODO |
