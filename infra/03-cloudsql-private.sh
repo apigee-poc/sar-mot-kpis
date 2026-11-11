@@ -102,12 +102,17 @@ else
   fi
 fi
 
-# 4. Grant sa-kpi-connector secretAccessor on DB password secret
+# 4. Grant sa-kpi-connector secretAccessor and viewer on DB password secret
 CONNECTOR_EMAIL="${CONNECTOR_SA}@${PROJECT_ID}.iam.gserviceaccount.com"
-echo "Granting roles/secretmanager.secretAccessor on ${DB_SECRET_NAME} to ${CONNECTOR_EMAIL}..."
+echo "Granting secret permissions on ${DB_SECRET_NAME} to ${CONNECTOR_EMAIL}..."
 gcloud secrets add-iam-policy-binding "${DB_SECRET_NAME}" \
   --member="serviceAccount:${CONNECTOR_EMAIL}" \
   --role="roles/secretmanager.secretAccessor" \
+  --project="${PROJECT_ID}" \
+  --quiet >/dev/null
+gcloud secrets add-iam-policy-binding "${DB_SECRET_NAME}" \
+  --member="serviceAccount:${CONNECTOR_EMAIL}" \
+  --role="roles/secretmanager.viewer" \
   --project="${PROJECT_ID}" \
   --quiet >/dev/null
 

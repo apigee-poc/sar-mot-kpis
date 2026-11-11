@@ -1,0 +1,38 @@
+{
+  "description": "SAR MOT KPIs Cloud SQL PostgreSQL connection for dev",
+  "connectorDetails": {
+    "provider": "default",
+    "name": "postgresql",
+    "version": 1
+  },
+  "configVariables": [
+    {
+      "key": "database_name",
+      "stringValue": "kpis_dev"
+    }
+  ],
+  "authConfig": {
+    "authType": "USER_PASSWORD",
+    "userPassword": {
+      "username": "kpi_reader",
+      "password": {
+        "secretVersion": "projects/apigee-nonprod-511322/secrets/sar-kpi-db-reader-password/versions/1"
+      }
+    }
+  },
+  "destinationConfigs": [
+    {
+      "key": "host",
+      "destinations": [
+        {
+          "host": "10.128.0.2",
+          "port": 5432
+        }
+      ]
+    }
+  ],
+  "nodeConfig": {
+    "minNodeCount": 1,
+    "maxNodeCount": 1
+  }
+}
