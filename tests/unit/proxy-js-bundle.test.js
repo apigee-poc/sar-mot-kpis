@@ -153,7 +153,7 @@ describe('proxy JS bundle: Rhino (ES5) compatibility and wiring', () => {
       });
     });
 
-    it('SIR refs the numeric variables set by setIntegrationParams', () => {
+    it('SIR refs the digit-string variables set by setIntegrationParams (type="integer" kept, D35)', () => {
       const sir = fs.readFileSync(path.join(POLICIES_DIR, 'SIR-SetIntegrationRequest.xml'), 'utf8');
       expect(sir).to.contain('ref="kpi.year"');
       expect(sir).to.contain('ref="kpi.quarter"');

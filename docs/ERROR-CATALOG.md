@@ -10,14 +10,25 @@ Every error response uses the OAS `ErrorResponse` envelope:
 ```
 
 `error.code` is the **integer** HTTP status (unquoted in the AssignMessage template).
-The `X-Request-Id` response header is always set to the same value as `header.traceId`.
+The proxy sets the `X-Request-Id` response header to `header.traceId` on every response.
+Platform behaviour on Apigee X (D35):
+
+- When the client sends no `X-Request-Id`, the platform adds one, a valid UUID, before the
+  proxy runs. A missing header therefore cannot be detected: that platform UUID becomes the
+  `traceId` and the request is processed normally. Only a present but malformed value gives
+  row 1's 400.
+- The platform controls the `X-Request-Id` response header: the client receives the value it
+  sent. For a valid ID this equals `header.traceId`. For a malformed ID (e.g. `nope`), the
+  response header echoes the malformed value while `header.traceId` is a fresh UUID. This is an
+  accepted deviation.
 The lookup key (column 3) is internal: it selects the message from the
 `sar-mot-kpis-errors-<SHA>` KVM and is written to logs, never to the client.
 
 ## Evaluation order in the proxy
 
 1. Set timestamp + default trace ID (a generated UUID, `createUuid()`, D33); load config KVM.
-2. Validate `X-Request-Id` (required, UUID). If valid, it becomes the trace ID.
+2. Validate `X-Request-Id` (required, UUID). If valid, it becomes the trace ID. (On Apigee X a
+   missing header is replaced by a platform UUID before the proxy runs, D35.)
 3. Verify API key → verify secret → SpikeArrest → Quota.
 4. Validate `X-Request-Timestamp` and `X-Operator-Id`.
 5. Route: unknown path → 404; known path with non-GET verb → 405.
@@ -30,7 +41,7 @@ The first failing check wins.
 
 | # | Scenario | Lookup key | HTTP | Message (KVM value) |
 |---|---|---|---|---|
-| 1 | `X-Request-Id` missing or not a UUID | `ERR-400-REQUESTID` | 400 | Header 'X-Request-Id' is required and must be a valid UUID. |
+| 1 | `X-Request-Id` not a UUID (a missing header is replaced by a platform UUID on Apigee X, D35) | `ERR-400-REQUESTID` | 400 | Header 'X-Request-Id' is required and must be a valid UUID. |
 | 2 | `X-API-Key` missing | `FailedToResolveAPIKey` | 401 | Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers. |
 | 3 | `X-API-Key` unknown / revoked / app not approved | `InvalidApiKey`, `ApiKeyNotApproved`, `DeveloperStatusNotActive`, `invalid_client-app_not_approved` | 401 | Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers. |
 | 4 | `X-API-Secret` missing or does not match the app | `ERR-401-SECRET` | 401 | Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers. |

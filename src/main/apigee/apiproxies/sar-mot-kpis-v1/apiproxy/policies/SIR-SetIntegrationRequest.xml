@@ -4,8 +4,9 @@
   (api_trigger/sar-kpi-get-<env>), project and region all come from the config KVM,
   so the bundle is identical in every environment (D4, D22).
   No <Request> element: it must be omitted when an IntegrationEndpoint runs the call.
-  year/quarter: numeric variables set by JS-SetIntegrationParams (quarter 0 = all quarters),
-  not the string query parameters, to avoid MismatchedTypeAndResolvedRef on type="integer".
+  year/quarter: digit-string variables set by JS-SetIntegrationParams (quarter "0" = all
+  quarters). A JS number resolved as "2,025" and failed type="integer" with
+  MismatchedTypeAndResolvedRef (dev trace, D35).
 -->
 <SetIntegrationRequest continueOnError="false" enabled="true" name="SIR-SetIntegrationRequest">
   <DisplayName>SIR-SetIntegrationRequest</DisplayName>

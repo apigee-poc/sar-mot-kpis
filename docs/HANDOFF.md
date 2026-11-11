@@ -266,7 +266,7 @@ See the policy table in `docs/PLAN.md` section "P5 — Apigee proxy" for the ful
 | `AM-SetTraceAndTimestamp` | AssignMessage | Set `custom.traceId = {createUuid()}` (D33), `custom.timestamp` = ISO-8601 UTC |
 | `KVM-GetConfig` | KeyValueMapOperations | Read from `sar-mot-kpis-config-__KVM_VERSION__` (incl. per-env integration name + trigger name) |
 | `JS-ValidateRequestInputs` | JavaScript | Validates X-Request-Id, X-Operator-Id, year, quarter; always sets the `custom.*Valid` flags (D34) |
-| `RF-InvalidRequestId` | RaiseFault | `custom.requestIdValid != "true"` (missing or non-UUID X-Request-Id) → ERR-400-REQUESTID |
+| `RF-InvalidRequestId` | RaiseFault | `custom.requestIdValid != "true"` (non-UUID X-Request-Id; a missing header is replaced by a platform UUID on Apigee X, D35) → ERR-400-REQUESTID |
 | `AM-SetClientTraceId` | AssignMessage | Overwrite `custom.traceId` with `X-Request-Id` header |
 | `VA-VerifyApiKey` | VerifyAPIKey | Verify `request.header.x-api-key` |
 | `RF-InvalidSecret` | RaiseFault | X-API-Secret ≠ client_secret → ERR-401-SECRET |
@@ -285,7 +285,7 @@ See the policy table in `docs/PLAN.md` section "P5 — Apigee proxy" for the ful
 | `RF-MethodNotAllowed` | RaiseFault | ERR-405-METHOD |
 | `RF-ResourceNotFound` | RaiseFault | ERR-404-RESOURCE |
 | `AM-SetLookupKey` + `KVM-GetErrorMessage` + `AM-BuildErrorResponse` | DefaultFaultRule | Integer error.code, escapeJSON message |
-| `AM-SetResponseRequestIdHeader` | AssignMessage | Echo X-Request-Id on every response |
+| `AM-SetResponseRequestIdHeader` | AssignMessage | Set X-Request-Id = traceId on every response (the platform still returns the client-sent value, D35) |
 
 ### VERIFY items for P5
 1. Exact response shape of IntegrationEndpoint — where `data` sits in the JSON (needs debug session).

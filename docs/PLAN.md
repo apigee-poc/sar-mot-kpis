@@ -237,7 +237,7 @@ identifiers, stamped by the pipeline.
 | | `RF-InvalidOperatorId` | `custom.operatorIdValid != "true"` (`^[12]\d{9}$`) → `ERR-400-OPERATOR` |
 | Flow `GetTotalFreight` (`/kpis/total_freight`, GET) | `RF-InvalidQueryParams` | `custom.yearValid` / `custom.quarterValid != "true"` (year `^20\d{2}$`; quarter absent or `^[1-4]$`, an empty `quarter=` is invalid) → `ERR-400-PARAMS` |
 | | `AM-SetKpiCode` | `kpi.code = total_freight` |
-| | `SIR-SetIntegrationRequest` | name, trigger name, project and region read via `ref` from the KVM; parameters `kpiCode`, `year`, `quarter` as numbers set by `JS-SetIntegrationParams` (quarter `0` = all quarters when absent, D24) |
+| | `SIR-SetIntegrationRequest` | name, trigger name, project and region read via `ref` from the KVM; parameters `kpiCode`, `year`, `quarter` (type `integer`) from digit strings set by `JS-SetIntegrationParams` (quarter `"0"` = all quarters when absent, D24; a JS number resolved as `2,025`, D35) |
 | resp | `RF-IntegrationError` | status ≠ 2xx → `ERR-500-INTEGRATION` |
 | | `EV-ExtractIntegrationOutput` | JSONPath `$.outputParameters.data.records` (integration output is `{records:[…]}`, D26; VERIFY the exact path with a debug session) |
 | | `RF-BadGateway` | `data.records` missing, not an array, or > 4 items → `ERR-502-GATEWAY` |
@@ -246,7 +246,7 @@ identifiers, stamped by the pipeline.
 | Flow `NotFound` (catch-all) | `RF-ResourceNotFound` | `ERR-404-RESOURCE` |
 | FaultRule (403) | `AM-SetStatus403` | `fault.name = "InvalidApiKeyForGivenResource"` |
 | DefaultFaultRule (`AlwaysEnforce=true`) | `AM-SetLookupKey` → `KVM-GetErrorMessage` → `AM-BuildErrorResponse` | integer `error.code`, `escapeJSON` on the message, status from override → `error.status.code` → 500 |
-| PostFlow resp + fault | `AM-SetResponseRequestIdHeader` | `X-Request-Id: {custom.traceId}` on every response |
+| PostFlow resp + fault | `AM-SetResponseRequestIdHeader` | `X-Request-Id: {custom.traceId}` on every response (the platform still returns the client-sent value; for a malformed ID it differs from `header.traceId`, D35) |
 
 Target: an **IntegrationEndpoint** target endpoint. Map timeout faults to `ERR-504-TIMEOUT`
 in a target FaultRule, as pet-poc does.
@@ -275,8 +275,8 @@ doesn't need the integration; dev passes the full Newman suite.
    - 200 quarter 3
    - 200 year 2026 → `data: []`
    - 200 year 2024 (4 items)
-   - Every response: `header.traceId === X-Request-Id` request header === `X-Request-Id`
-     response header; `timestamp` matches ISO-8601; `isSuccess` correct; `error.code` is a
+   - Every response with a valid `X-Request-Id`: `header.traceId === X-Request-Id` request header === `X-Request-Id`
+     response header (for a malformed ID the response header echoes it and `header.traceId` is a fresh UUID; a missing header cannot be tested, the platform adds one, D35); `timestamp` matches ISO-8601; `isSuccess` correct; `error.code` is a
      **number** equal to the HTTP status
    - Schema check of every body against the OAS schemas (embed the JSON schemas in the
      collection)
