@@ -29,6 +29,7 @@
   "devDependencies": {
     "apigeelint": "2.85.1",
     "chai": "^4.4.1",
+    "js-yaml": "4.3.2",
     "mocha": "^10.8.2",
     "newman": "6.2.3"
   }
