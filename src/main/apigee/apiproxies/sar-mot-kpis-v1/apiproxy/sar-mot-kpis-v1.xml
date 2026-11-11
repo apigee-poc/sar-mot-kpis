@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<APIProxy name="sar-mot-kpis-v1">
+  <DisplayName>sar-mot-kpis-v1</DisplayName>
+  <Description>SAR MOT KPI Data Sharing POC API Proxy</Description>
+</APIProxy>

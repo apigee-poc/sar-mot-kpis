@@ -1,0 +1,37 @@
+{
+  "name": "sar-mot-kpis",
+  "version": "1.0.0",
+  "description": "SAR MOT KPI Data Sharing POC: Apigee X -> Application Integration -> Integration Connectors -> Cloud SQL",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "lint": "apigeelint -s src/main/apigee/apiproxies/sar-mot-kpis-v1/apiproxy -f table.js --profile apigeex --maxWarnings 0",
+    "test:unit": "mocha tests/unit",
+    "test:local": "newman run tests/sar-mot-kpis.postman_collection.json -e tests/environments/local.postman_environment.json --reporters cli,junit --reporter-junit-export reports/newman-local.xml",
+    "test:dev": "newman run tests/sar-mot-kpis.postman_collection.json -e tests/environments/dev.postman_environment.json --reporters cli,junit --reporter-junit-export reports/newman-dev.xml",
+    "test:staging": "newman run tests/sar-mot-kpis.postman_collection.json -e tests/environments/staging.postman_environment.json --reporters cli,junit --reporter-junit-export reports/newman-staging.xml",
+    "test:prod": "newman run tests/sar-mot-kpis.postman_collection.json -e tests/environments/prod.postman_environment.json --reporters cli,junit --reporter-junit-export reports/newman-prod.xml",
+    "package": "mvn -f src/main/apigee/apiproxies/sar-mot-kpis-v1/pom.xml clean package -Pdev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apigee-poc/sar-mot-kpis.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/apigee-poc/sar-mot-kpis/issues"
+  },
+  "homepage": "https://github.com/apigee-poc/sar-mot-kpis#readme",
+  "devDependencies": {
+    "apigeelint": "2.85.1",
+    "chai": "^4.4.1",
+    "mocha": "^10.8.2",
+    "newman": "6.2.3"
+  }
+}

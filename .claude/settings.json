@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm ci)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run test:local:*)",
+      "Bash(npm run test:unit:*)",
+      "Bash(npm run package:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ],
+    "ask": [
+      "Bash(gcloud:*)",
+      "Bash(integrationcli:*)",
+      "Bash(mvn:*)",
+      "Bash(curl:*)",
+      "Bash(bash scripts/:*)",
+      "Bash(npm run test:dev:*)",
+      "Bash(npm run test:staging:*)",
+      "Bash(git push:*)"
+    ],
+    "deny": [
+      "Bash(npm run test:prod:*)",
+      "Bash(gcloud projects delete:*)",
+      "Bash(gcloud sql instances delete:*)",
+      "Bash(gcloud sql databases delete:*)",
+      "Bash(gcloud secrets delete:*)",
+      "Bash(gcloud iam service-accounts delete:*)",
+      "Bash(git push --force:*)",
+      "Read(./**/*.pem)",
+      "Read(./**/*key*.json)",
+      "Read(./.env)"
+    ]
+  }
+}

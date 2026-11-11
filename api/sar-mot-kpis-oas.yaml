@@ -1,0 +1,396 @@
+openapi: 3.0.3
+info:
+  title: SAR MOT KPI Data Sharing API
+  description: |
+    RESTful API exposing approved Saudi Arabia Railways (SAR) Key Performance Indicators (KPIs)
+    to the Ministry of Transport (MOT) over private GSN connectivity.
+
+    All requests require API Key and Secret authentication and are strictly read-only (GET).
+  version: 1.0.1
+servers:
+  - url: https://api.sar.gov.sa/mot-kpis/business-domain/v1
+    description: Apigee Gateway Target Host
+security:
+  - ApiKeyAuth: []
+    ApiSecretAuth: []
+tags:
+  - name: Business Domain KPIs
+    description: Approved SAR business-domain KPIs shared with MOT.
+paths:
+  /kpis/total_freight:
+    get:
+      tags:
+        - Business Domain KPIs
+      summary: Retrieves the total number of shipments for all transportation modes
+      description: |
+        Retrieves the total number of shipments for all transportation modes (maritime, rail, road, and air).
+        If `quarter` is omitted, all available quarters of the requested year are returned.
+      operationId: getTotalFreight
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - $ref: '#/components/parameters/XRequestTimestamp'
+        - $ref: '#/components/parameters/XOperatorId'
+        - $ref: '#/components/parameters/Year'
+        - $ref: '#/components/parameters/Quarter'
+      responses:
+        '200':
+          description: KPI dataset successfully retrieved.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KpiSuccessResponse'
+              examples:
+                full-year:
+                  summary: All quarters of 2025 (quarter not provided)
+                  value:
+                    header:
+                      timestamp: '2026-10-14T08:30:00Z'
+                      traceId: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+                      isSuccess: true
+                    data:
+                      - quarter: 1
+                        year: 2025
+                        actual: 1420500
+                        loadTime: '2025-04-05T02:00:00Z'
+                      - quarter: 2
+                        year: 2025
+                        actual: 1388200
+                        loadTime: '2025-07-05T02:00:00Z'
+                      - quarter: 3
+                        year: 2025
+                        actual: 1512750
+                        loadTime: '2025-10-05T02:00:00Z'
+                single-quarter:
+                  summary: A single quarter (quarter=3)
+                  value:
+                    header:
+                      timestamp: '2026-10-14T08:30:00Z'
+                      traceId: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+                      isSuccess: true
+                    data:
+                      - quarter: 3
+                        year: 2025
+                        actual: 1512750
+                        loadTime: '2025-10-05T02:00:00Z'
+                empty:
+                  summary: No data available yet for the requested period
+                  value:
+                    header:
+                      timestamp: '2026-10-14T08:30:00Z'
+                      traceId: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+                      isSuccess: true
+                    data: []
+        '400':
+          description: Bad Request. Request parameters failed schema or semantic validation.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                header:
+                  timestamp: '2026-10-14T08:30:01Z'
+                  traceId: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+                  isSuccess: false
+                error:
+                  code: 400
+                  message: Query parameter 'quarter' must be an integer between 1 and 4, and 'year' must be a valid 4-digit Gregorian year (2000-2099).
+        '401':
+          description: Unauthorized. API Key or Secret is missing, invalid, or revoked.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                header:
+                  timestamp: '2026-10-14T08:30:01Z'
+                  traceId: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+                  isSuccess: false
+                error:
+                  code: 401
+                  message: Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers.
+        '403':
+          description: Forbidden. The verified API credentials do not have permission for the requested KPI.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                header:
+                  timestamp: '2026-10-14T08:30:01Z'
+                  traceId: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+                  isSuccess: false
+                error:
+                  code: 403
+                  message: API Key is not associated with an approved API Product for KPI data sharing.
+        '404':
+          description: Not Found. The requested resource path does not exist.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                header:
+                  timestamp: '2026-10-14T08:30:01Z'
+                  traceId: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+                  isSuccess: false
+                error:
+                  code: 404
+                  message: Requested resource was not found. Please verify the API path.
+        '405':
+          description: Method Not Allowed. Only HTTP GET read-only operations are supported.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                header:
+                  timestamp: '2026-10-14T08:30:01Z'
+                  traceId: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+                  isSuccess: false
+                error:
+                  code: 405
+                  message: HTTP method not allowed. Only 'GET' operations are supported on this endpoint.
+        '429':
+          description: Too Many Requests. Rate quota or SpikeArrest threshold exceeded.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                header:
+                  timestamp: '2026-10-14T08:30:01Z'
+                  traceId: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+                  isSuccess: false
+                error:
+                  code: 429
+                  message: Rate limit has been exceeded.
+        '500':
+          description: Internal Server Error.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                header:
+                  timestamp: '2026-10-14T08:30:01Z'
+                  traceId: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+                  isSuccess: false
+                error:
+                  code: 500
+                  message: An unexpected error occurred. Quote the traceId when contacting support.
+        '502':
+          description: Bad Gateway. Invalid or malformed response received from the backend service.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                header:
+                  timestamp: '2026-10-14T08:30:01Z'
+                  traceId: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+                  isSuccess: false
+                error:
+                  code: 502
+                  message: Invalid or malformed response received from backend service.
+        '504':
+          description: Gateway Timeout.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                header:
+                  timestamp: '2026-10-14T08:30:01Z'
+                  traceId: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+                  isSuccess: false
+                error:
+                  code: 504
+                  message: The request timed out. The service is temporarily unavailable.
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Apigee consumer developer application key (Client ID).
+    ApiSecretAuth:
+      type: apiKey
+      in: header
+      name: X-API-Secret
+      description: Apigee consumer developer application secret (Client Secret).
+  parameters:
+    XRequestId:
+      name: X-Request-Id
+      in: header
+      required: true
+      description: Client correlation UUID for end-to-end tracing across GSN.
+      schema:
+        type: string
+        format: uuid
+        example: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+    XRequestTimestamp:
+      name: X-Request-Timestamp
+      in: header
+      required: true
+      description: The client request timestamp in UTC.
+      schema:
+        type: string
+        format: date-time
+        example: '2025-10-01T06:41:18.217Z'
+    XOperatorId:
+      name: X-Operator-Id
+      in: header
+      required: true
+      description: National ID or Iqama number of the operator sending the request.
+      schema:
+        type: string
+        pattern: ^[12]\d{9}$
+        example: '1000124102'
+    Year:
+      name: year
+      in: query
+      required: true
+      description: 4-digit Gregorian calendar year to filter the dataset.
+      schema:
+        type: integer
+        minimum: 2000
+        maximum: 2099
+        example: 2025
+    Quarter:
+      name: quarter
+      in: query
+      required: false
+      description: Reporting quarter (1 to 4). If omitted, all available quarters of the year are returned.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 4
+        example: 3
+  headers:
+    XRequestId:
+      description: Correlation ID. Echoes the client X-Request-Id and matches header.traceId in the response body.
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    ResponseHeader:
+      type: object
+      required:
+        - timestamp
+        - traceId
+        - isSuccess
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp when the response was generated in UTC.
+          example: '2026-10-14T08:30:00Z'
+        traceId:
+          type: string
+          format: uuid
+          description: Correlation identifier for debugging and Cloud Logging. Matches the X-Request-Id header.
+          example: d7b2a92c-5f81-42cb-9964-b0e6df41c107
+        isSuccess:
+          type: boolean
+          description: Indicates whether the request was successfully processed.
+          example: true
+    KpiRecord:
+      type: object
+      required:
+        - quarter
+        - year
+        - actual
+        - loadTime
+      properties:
+        quarter:
+          type: integer
+          minimum: 1
+          maximum: 4
+          description: Reporting quarter of the record.
+          example: 1
+        year:
+          type: integer
+          minimum: 2000
+          maximum: 2099
+          description: Gregorian year of the record.
+          example: 2025
+        actual:
+          type: number
+          format: double
+          minimum: 0
+          description: Total metric value recorded.
+          example: 1420500
+        loadTime:
+          type: string
+          format: date-time
+          description: Timestamp when the record was ingested into the warehouse.
+          example: '2025-04-05T02:00:00Z'
+    KpiSuccessResponse:
+      type: object
+      required:
+        - header
+        - data
+      properties:
+        header:
+          $ref: '#/components/schemas/ResponseHeader'
+        data:
+          type: array
+          description: List of metric data records retrieved from the KPI data source (at most one per quarter).
+          minItems: 0
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/KpiRecord'
+    ErrorDetail:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: integer
+          description: HTTP status code representing the error condition.
+          example: 400
+        message:
+          type: string
+          description: Human-readable explanation of the error.
+          example: Query parameter 'quarter' must be an integer between 1 and 4.
+    ErrorResponse:
+      type: object
+      required:
+        - header
+        - error
+      properties:
+        header:
+          $ref: '#/components/schemas/ResponseHeader'
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
