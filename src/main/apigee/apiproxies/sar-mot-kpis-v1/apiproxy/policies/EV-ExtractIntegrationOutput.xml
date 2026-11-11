@@ -4,8 +4,10 @@
   debug sessions and logging. The 200 body does NOT use this variable: the array is
   parsed, validated and re-serialised by JS-ValidateIntegrationOutput (kpi.recordsJson),
   so the response does not depend on how ExtractVariables renders a JSON array.
+  continueOnError is true: a non-JSON body must not fault here (that would become a 500);
+  JS-ValidateIntegrationOutput + RF-BadGateway turn it into 502 ERR-502-GATEWAY.
 -->
-<ExtractVariables continueOnError="false" enabled="true" name="EV-ExtractIntegrationOutput">
+<ExtractVariables continueOnError="true" enabled="true" name="EV-ExtractIntegrationOutput">
   <DisplayName>EV-ExtractIntegrationOutput</DisplayName>
   <Source>response</Source>
   <VariablePrefix>kpi</VariablePrefix>

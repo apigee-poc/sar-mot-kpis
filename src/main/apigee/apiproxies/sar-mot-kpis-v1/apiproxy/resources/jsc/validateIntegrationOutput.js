@@ -3,11 +3,12 @@
  *
  * The IntegrationEndpoint response is the integrations.execute JSON:
  *   {"executionId": "...", "outputParameters": {"data": {"records": [KpiRecord, ...]}}}
- * (D26, D30). This script:
- *   - parses response.content (and outputParameters.data too, if it arrives as a string);
+ * (D26, D30). A body without outputParameters but with a top-level "data" is also
+ * accepted (tolerance, the IntegrationEndpoint shape is not documented). This script:
+ *   - parses response.content (and data too, if it arrives as a string);
  *   - checks that records is an array of at most 4 KpiRecords (ERROR-CATALOG row 14);
  *   - rebuilds each record with exactly the OAS fields, in OAS order;
- *   - sets custom.outputValid (boolean) and kpi.recordsJson (JSON array text) for
+ *   - sets custom.outputValid ("true"/"false") and kpi.recordsJson (JSON array text) for
  *     AM-BuildKpiResponse. RF-BadGateway raises ERR-502-GATEWAY when the output is not valid.
  *
  * ES5 only (Apigee Rhino). The pure function is exported for mocha when `module` exists.
@@ -66,11 +67,17 @@ function validateIntegrationOutput(content) {
   } catch (e) {
     return invalid;
   }
-  if (body === null || typeof body !== "object" || !body.outputParameters ||
-      typeof body.outputParameters !== "object") {
+  if (body === null || typeof body !== "object" || isArray(body)) {
     return invalid;
   }
-  data = body.outputParameters.data;
+  if (body.outputParameters !== null && typeof body.outputParameters === "object") {
+    data = body.outputParameters.data;
+  } else if (body.outputParameters === undefined) {
+    // Tolerance (V2): a body without the execute wrapper, {"data": {"records": [...]}}.
+    data = body.data;
+  } else {
+    return invalid;
+  }
   if (typeof data === "string") {
     try {
       data = JSON.parse(data);
@@ -97,7 +104,7 @@ function validateIntegrationOutput(content) {
 
 if (typeof context !== "undefined") {
   var result = validateIntegrationOutput(context.getVariable("response.content"));
-  context.setVariable("custom.outputValid", result.valid);
+  context.setVariable("custom.outputValid", String(result.valid));
   if (result.valid) {
     context.setVariable("kpi.recordsJson", result.recordsJson);
   }

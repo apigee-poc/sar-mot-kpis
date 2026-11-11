@@ -230,13 +230,13 @@ identifiers, stamped by the pipeline.
 | | `RF-InvalidRequestId` | missing or not a UUID → `ERR-400-REQUESTID` |
 | | `AM-SetClientTraceId` | `custom.traceId = request.header.X-Request-Id` |
 | | `VA-VerifyApiKey` | `request.header.x-api-key` |
-| | `RF-InvalidSecret` | `request.header.x-api-secret != verifyapikey.VA-VerifyApiKey.client_secret` → `ERR-401-SECRET` |
+| | `RF-InvalidSecret` | `JS-ValidateApiSecret` (constant-time compare of `X-API-Secret` with `verifyapikey.VA-VerifyApiKey.client_secret`, sets `custom.secretValid`) → `ERR-401-SECRET` |
 | | `SA-SpikeArrest`, `Q-ImposeQuota` | rates from KVM, with API product quota overriding when set |
 | | `JS-ValidateRequestTimestamp` + `RF-InvalidRequestTimestamp` | ISO parse and clock-skew check → `ERR-400-TIMESTAMP` (unit-tested JS) |
 | | `RF-InvalidOperatorId` | `^[12]\d{9}$` → `ERR-400-OPERATOR` |
 | Flow `GetTotalFreight` (`/kpis/total_freight`, GET) | `RF-InvalidQueryParams` | year `^20\d{2}$`; quarter empty or `^[1-4]$` → `ERR-400-PARAMS` |
 | | `AM-SetKpiCode` | `kpi.code = total_freight` |
-| | `SIR-SetIntegrationRequest` | name, trigger name, project and region read via `ref` from the KVM; parameters `kpiCode`, `year`, `quarter` (omit quarter when absent) |
+| | `SIR-SetIntegrationRequest` | name, trigger name, project and region read via `ref` from the KVM; parameters `kpiCode`, `year`, `quarter` as numbers set by `JS-SetIntegrationParams` (quarter `0` = all quarters when absent, D24) |
 | resp | `RF-IntegrationError` | status ≠ 2xx → `ERR-500-INTEGRATION` |
 | | `EV-ExtractIntegrationOutput` | JSONPath `$.outputParameters.data.records` (integration output is `{records:[…]}`, D26; VERIFY the exact path with a debug session) |
 | | `RF-BadGateway` | `data.records` missing, not an array, or > 4 items → `ERR-502-GATEWAY` |

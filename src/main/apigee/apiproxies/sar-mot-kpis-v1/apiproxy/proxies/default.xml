@@ -49,6 +49,12 @@
       <Name>AM-SetSystemError</Name>
       <Condition>custom.errorMessage = null</Condition>
     </Step>
+    <!-- Second read: the ERR-SYS-500 message also comes from the KVM. AM-BuildErrorResponse
+         keeps a literal only as a last resort when the error KVM is unreachable. -->
+    <Step>
+      <Name>KVM-GetErrorMessage</Name>
+      <Condition>custom.errorMessage = null</Condition>
+    </Step>
     <Step>
       <Name>AM-BuildErrorResponse</Name>
     </Step>
@@ -80,8 +86,11 @@
         <Name>VA-VerifyApiKey</Name>
       </Step>
       <Step>
+        <Name>JS-ValidateApiSecret</Name>
+      </Step>
+      <Step>
         <Name>RF-InvalidSecret</Name>
-        <Condition>(request.header.X-API-Secret = null) or (request.header.X-API-Secret != verifyapikey.VA-VerifyApiKey.client_secret)</Condition>
+        <Condition>custom.secretValid != "true"</Condition>
       </Step>
       <Step>
         <Name>SA-SpikeArrest</Name>
@@ -97,7 +106,7 @@
       </Step>
       <Step>
         <Name>RF-InvalidRequestTimestamp</Name>
-        <Condition>custom.timestampValid != true</Condition>
+        <Condition>custom.timestampValid != "true"</Condition>
       </Step>
       <Step>
         <Name>RF-InvalidOperatorId</Name>
@@ -118,7 +127,7 @@
         </Step>
         <Step>
           <Name>RF-ResourceNotFound</Name>
-          <Condition>custom.kpiAllowed != true</Condition>
+          <Condition>custom.kpiAllowed != "true"</Condition>
         </Step>
         <Step>
           <Name>RF-InvalidQueryParams</Name>
@@ -132,6 +141,9 @@
           <!-- "quarter=" present but empty: 400, independent of how Apigee treats an empty param -->
           <Name>RF-InvalidQueryParams</Name>
           <Condition>request.querystring JavaRegex "(.*&amp;)?quarter=(&amp;.*)?"</Condition>
+        </Step>
+        <Step>
+          <Name>JS-SetIntegrationParams</Name>
         </Step>
         <Step>
           <Name>SIR-SetIntegrationRequest</Name>
@@ -154,7 +166,7 @@
         </Step>
         <Step>
           <Name>RF-BadGateway</Name>
-          <Condition>custom.outputValid != true</Condition>
+          <Condition>custom.outputValid != "true"</Condition>
         </Step>
         <Step>
           <Name>AM-BuildKpiResponse</Name>

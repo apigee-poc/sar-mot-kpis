@@ -20,6 +20,8 @@
     <Policy>AM-SetTraceAndTimestamp</Policy>
     <Policy>EV-ExtractIntegrationOutput</Policy>
     <Policy>JS-CheckKpiAllowed</Policy>
+    <Policy>JS-SetIntegrationParams</Policy>
+    <Policy>JS-ValidateApiSecret</Policy>
     <Policy>JS-ValidateIntegrationOutput</Policy>
     <Policy>JS-ValidateRequestTimestamp</Policy>
     <Policy>KVM-GetConfig</Policy>
@@ -46,6 +48,8 @@
   </IntegrationEndpoints>
   <Resources>
     <Resource>jsc://checkKpiAllowed.js</Resource>
+    <Resource>jsc://setIntegrationParams.js</Resource>
+    <Resource>jsc://validateApiSecret.js</Resource>
     <Resource>jsc://validateIntegrationOutput.js</Resource>
     <Resource>jsc://validateRequestTimestamp.js</Resource>
   </Resources>

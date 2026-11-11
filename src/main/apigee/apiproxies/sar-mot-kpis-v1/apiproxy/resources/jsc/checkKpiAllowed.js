@@ -2,7 +2,7 @@
  * JS-CheckKpiAllowed
  *
  * The config KVM key allowedKpis is a comma-separated list of the kpiCodes this
- * environment may serve (e.g. "total_freight"). Sets custom.kpiAllowed (boolean);
+ * environment may serve (e.g. "total_freight"). Sets custom.kpiAllowed ("true"/"false");
  * the flow raises ERR-404-RESOURCE (RF-ResourceNotFound) when it is not true.
  * Matching is exact and case-sensitive; blanks around entries are ignored.
  *
@@ -31,7 +31,7 @@ function isKpiAllowed(kpiCode, allowedKpis) {
 if (typeof context !== "undefined") {
   context.setVariable(
     "custom.kpiAllowed",
-    isKpiAllowed(context.getVariable("kpi.code"), context.getVariable("config.allowedKpis"))
+    String(isKpiAllowed(context.getVariable("kpi.code"), context.getVariable("config.allowedKpis")))
   );
 }
 

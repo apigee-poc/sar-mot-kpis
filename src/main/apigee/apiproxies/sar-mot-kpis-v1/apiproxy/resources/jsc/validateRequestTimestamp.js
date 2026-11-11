@@ -5,7 +5,7 @@
  *   - required;
  *   - ISO-8601 UTC: YYYY-MM-DDTHH:mm:ss[.f{1,3}]Z, with a real calendar date and time;
  *   - within config.maxClockSkewSeconds of the gateway clock (past or future).
- * Sets custom.timestampValid (boolean); RF-InvalidRequestTimestamp raises ERR-400-TIMESTAMP
+ * Sets custom.timestampValid ("true"/"false"); RF-InvalidRequestTimestamp raises ERR-400-TIMESTAMP
  * when it is not true.
  *
  * ES5 only (Apigee Rhino). The pure functions are exported for mocha when `module` exists.
@@ -99,7 +99,7 @@ if (typeof context !== "undefined") {
   var configuredSkew = context.getVariable("config.maxClockSkewSeconds");
   context.setVariable(
     "custom.timestampValid",
-    validateRequestTimestamp(headerValue, new Date().getTime(), configuredSkew)
+    String(validateRequestTimestamp(headerValue, new Date().getTime(), configuredSkew))
   );
 }
 
