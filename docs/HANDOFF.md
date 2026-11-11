@@ -14,7 +14,7 @@
 | P1 | Non-prod foundation (APIs, SAs, IAM) | ✅ DONE | `cbf1347` |
 | P2 | Private Cloud SQL + mock data | ✅ DONE | `b5813cf` |
 | P3 | Integration Connector (private) | ✅ DONE | `8987442` |
-| P4 | Application Integration | ⏳ TODO | — |
+| P4 | Application Integration | ✅ DONE | `3400476` |
 | P5 | Apigee proxy | ⏳ TODO | — |
 | P6 | Tests (unit, Newman, integration) | ⏳ TODO | — |
 | P7 | CI/CD pipelines (PR + non-prod) | ⏳ TODO | — |
