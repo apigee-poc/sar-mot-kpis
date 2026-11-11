@@ -43,10 +43,54 @@ case "$ENV_NAME" in
     ;;
 esac
 
+FOLDERS=()
+SCENARIO=""
+PREV=""
 for arg in "$@"; do
   case "$arg" in
     --verbose|-v)
       echo "Refusing --verbose: it prints request headers, including X-API-Secret." >&2
+      exit 2
+      ;;
+    --folder=*) FOLDERS+=("${arg#--folder=}") ;;
+    --env-var=faultScenario=*) SCENARIO="${arg#--env-var=faultScenario=}" ;;
+  esac
+  if [ "$PREV" = "--folder" ]; then
+    FOLDERS+=("$arg")
+  elif [ "$PREV" = "--env-var" ]; then
+    case "$arg" in
+      faultScenario=*) SCENARIO="${arg#faultScenario=}" ;;
+    esac
+  fi
+  PREV="$arg"
+done
+
+# Fault-injection folders: their requests are skipped unless faultScenario matches, which would
+# give a green run with 0 requests. Require the matching scenario (tests/fault-injection/README.md).
+for folder in ${FOLDERS[@]+"${FOLDERS[@]}"}; do
+  case "$folder" in
+    "Fault injection (needs scratch config)")
+      echo "Refusing the parent fault-injection folder: run one FI-xx subfolder at a time." >&2
+      exit 2
+      ;;
+    FI-06*) ALLOWED="fi06" ;;
+    FI-07*) ALLOWED="fi07" ;;
+    FI-13*) ALLOWED="fi13" ;;
+    FI-16*) ALLOWED="fi16 fi16b" ;;
+    FI-*)
+      echo "Unknown fault-injection folder: $folder" >&2
+      exit 2
+      ;;
+    *) continue ;;
+  esac
+  if [ "$ENV_NAME" != "dev" ]; then
+    echo "Refusing: fault-injection folders run on dev only." >&2
+    exit 2
+  fi
+  case " $ALLOWED " in
+    *" $SCENARIO "*) ;;
+    *)
+      echo "Refusing: folder '$folder' needs --env-var faultScenario=<${ALLOWED// /|}> (got '${SCENARIO}')." >&2
       exit 2
       ;;
   esac
@@ -57,7 +101,7 @@ cd "$ROOT"
 
 COLLECTION="tests/sar-mot-kpis.postman_collection.json"
 ENV_FILE="tests/environments/${ENV_NAME}.postman_environment.json"
-REPORT="reports/newman-${ENV_NAME}.xml"
+REPORT="reports/newman-${ENV_NAME}${SCENARIO:+-${SCENARIO}}.xml"
 
 read_secret() {
   gcloud secrets versions access latest --secret="$1" --project="$PROJECT" --quiet

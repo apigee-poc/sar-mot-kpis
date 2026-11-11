@@ -26,22 +26,37 @@ const collectionText = read(gen.OUTPUT_FILE);
 const collection = JSON.parse(collectionText);
 const catalog = gen.readCatalog();
 
-// All requests, with their folder name.
+// All requests (subfolders included), with their top-level folder name.
 function requests() {
   const out = [];
-  collection.item.forEach((folder) => {
-    folder.item.forEach((item) => out.push({ folder: folder.name, item }));
+  const walk = (top, items) => items.forEach((item) => {
+    if (item.request) {
+      out.push({ folder: top, item });
+    } else {
+      walk(top, item.item);
+    }
   });
+  collection.item.forEach((folder) => walk(folder.name, folder.item));
   return out;
 }
 
-// The `expected` object a request's pre-request script sets.
+function preRequestLines(item) {
+  return item.event.find((e) => e.listen === 'prerequest').script.exec;
+}
+
+// The `expected` object a request's pre-request script sets (always its last line).
 function expectedOf(item) {
-  const pre = item.event.find((e) => e.listen === 'prerequest');
-  const line = pre.script.exec.join('\n');
-  const m = /^pm\.variables\.set\('expected', JSON\.stringify\((.*)\)\);$/.exec(line);
-  expect(m, `${item.name}: pre-request must only set 'expected'`).to.not.equal(null);
+  const lines = preRequestLines(item);
+  const m = /^pm\.variables\.set\('expected', JSON\.stringify\((.*)\)\);$/.exec(lines[lines.length - 1]);
+  expect(m, `${item.name}: the last pre-request line must set 'expected'`).to.not.equal(null);
   return JSON.parse(m[1]);
+}
+
+// Checks an error expectation against the catalog row.
+function expectCatalogError(name, expected, row) {
+  expect(expected.row, name).to.equal(row);
+  expect(expected.status, name).to.equal(catalog[row].status);
+  expect(expected.message, name).to.equal(catalog[row].message);
 }
 
 // Minimal reader for `components.schemas` of the OAS (YAML-free, indentation based). Supports
@@ -128,20 +143,17 @@ describe('Newman collection (tests/sar-mot-kpis.postman_collection.json)', () =>
     expect(gen.render()).to.equal(gen.render());
   });
 
-  it('every catalog row 1-16 has a request or is listed as fault-injection (Task F) or waived', () => {
-    const titled = new Set();
+  it('every catalog row 1-16 has a request asserting its error, except the waived rows 14 and 15', () => {
+    const asserted = new Set();
     requests().forEach(({ item }) => {
-      const m = /^Row (\d+): /.exec(item.name);
-      if (m) titled.add(Number(m[1]));
+      const expected = expectedOf(item);
+      if (expected.row) asserted.add(expected.row);
     });
     const waived = Object.keys(gen.WAIVED_ROWS).map(Number);
     expect(Object.keys(catalog).map(Number)).to.deep.equal(Array.from({ length: 16 }, (_, i) => i + 1));
     Object.keys(catalog).map(Number).forEach((row) => {
-      const covered = titled.has(row) || gen.FAULT_INJECTION_ROWS.includes(row) || waived.includes(row);
-      expect(covered, `catalog row ${row} not covered`).to.equal(true);
-    });
-    [1, 2, 3, 4, 5, 8, 9, 10, 11, 12].forEach((row) => {
-      expect(titled.has(row), `row ${row} must have a request`).to.equal(true);
+      expect(asserted.has(row) || waived.includes(row), `catalog row ${row} not covered`).to.equal(true);
+      expect(asserted.has(row) && waived.includes(row), `row ${row} both tested and waived`).to.equal(false);
     });
     expect(waived).to.deep.equal([14, 15]);
     expect(collection.info.description).to.include('Row 14 (502) WAIVED');
@@ -152,15 +164,63 @@ describe('Newman collection (tests/sar-mot-kpis.postman_collection.json)', () =>
     requests().forEach(({ folder, item }) => {
       const expected = expectedOf(item);
       if (folder === gen.FOLDERS.happy) {
+        expect(expected, item.name).to.have.all.keys('status', 'data');
         expect(expected.status, item.name).to.equal(200);
         expect(expected.data, item.name).to.be.an('array');
         return;
       }
       const row = Number(/^Row (\d+): /.exec(item.name)[1]);
-      expect(expected.row, item.name).to.equal(row);
-      expect(expected.status, item.name).to.equal(catalog[row].status);
-      expect(expected.message, item.name).to.equal(catalog[row].message);
-      expect(item.name, item.name).to.match(new RegExp(` -> ${catalog[row].status}$`));
+      if (expected.status === 200) {
+        // A fault-injection step that must still pass (e.g. the first request of a rate window).
+        expect(folder, item.name).to.equal(gen.FOLDERS.faults);
+        expect(expected, item.name).to.not.have.any.keys('row', 'message', 'or');
+        expect(item.name, item.name).to.match(/ -> 200$/);
+        return;
+      }
+      expectCatalogError(item.name, expected, row);
+      if (expected.or) {
+        expect(expected.or, item.name).to.deep.equal({ status: 200 });
+        expect(item.name, item.name).to.match(new RegExp(` -> ${catalog[row].status} or 200$`));
+      } else {
+        expect(item.name, item.name).to.match(new RegExp(` -> ${catalog[row].status}$`));
+      }
+    });
+  });
+
+  it('fault injection: one subfolder per scenario, each request skipped unless its scenario is set', () => {
+    const faults = collection.item.find((f) => f.name === gen.FOLDERS.faults);
+    expect(faults.item.map((f) => f.name)).to.deep.equal([
+      'FI-06 SpikeArrest 429', 'FI-07 Quota 429', 'FI-13 Integration failure 500', 'FI-16 Unmapped fault 500'
+    ]);
+    const rowsOf = {
+      'FI-06 SpikeArrest 429': 6, 'FI-07 Quota 429': 7, 'FI-13 Integration failure 500': 13, 'FI-16 Unmapped fault 500': 16
+    };
+    faults.item.forEach((sub) => {
+      expect(sub.description, sub.name).to.include('bash scripts/fi-deploy.sh fi');
+      expect(sub.description, sub.name).to.include('bash scripts/fi-restore.sh');
+      expect(sub.item.length, sub.name).to.be.above(0);
+      sub.item.forEach((item) => {
+        expect(item.name, item.name).to.match(new RegExp(`^Row ${rowsOf[sub.name]}: `));
+        const pre = preRequestLines(item).join('\n');
+        expect(pre, item.name).to.match(/^if \(!\["fi\d+b?"(,"fi\d+b?")*\]\.includes\(pm\.variables\.get\('faultScenario'\)\)\) \{/);
+        expect(pre, item.name).to.include('pm.execution.skipRequest();');
+      });
+      // The last request of each scenario must strictly assert the catalog error.
+      const last = expectedOf(sub.item[sub.item.length - 1]);
+      expect(last.or, sub.name).to.equal(undefined);
+      expectCatalogError(sub.name, last, rowsOf[sub.name]);
+    });
+    // Quota: A and B pass, C is 429; A waits for a fresh minute.
+    const quota = faults.item[1].item;
+    expect(quota.map((i) => expectedOf(i).status)).to.deep.equal([200, 200, 429]);
+    expect(preRequestLines(quota[0]).join('\n')).to.include('setTimeout(');
+    // SpikeArrest: A passes, the last one is 429.
+    const spike = faults.item[0].item.map((i) => expectedOf(i).status);
+    expect(spike[0]).to.equal(200);
+    expect(spike[spike.length - 1]).to.equal(429);
+    // No other request is skipped or delayed.
+    requests().filter(({ folder }) => folder !== gen.FOLDERS.faults).forEach(({ item }) => {
+      expect(preRequestLines(item), item.name).to.have.length(1);
     });
   });
 
@@ -248,6 +308,7 @@ describe('Postman environments (tests/environments)', () => {
       expect(vars.baseUrl.value).to.equal(ENV_HOSTS[env]);
       expect(vars.basePath.value).to.equal(BASE_PATH);
       expect(vars.operatorId.value).to.match(/^[12]\d{9}$/);
+      expect(vars.faultScenario, `${env}: faultScenario`).to.include({ value: '' });
       SECRET_VARS.forEach((k) => {
         expect(vars[k], `${env}: ${k}`).to.include({ type: 'secret', value: '' });
       });

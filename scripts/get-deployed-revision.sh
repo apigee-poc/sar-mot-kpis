@@ -5,7 +5,16 @@
 set -euo pipefail
 
 ORG="$1"; ENV="$2"; PROXY="$3"; OUT_FILE="${4:-}"
-PY="$(command -v python3 || gcloud info --format='value(basic.python_location)')"
+# First Python that actually runs: python3, then python, else gcloud's bundled one (as before).
+# A bare "command -v python3" can pick the Windows Store stub, which only prints
+# "Python was not found", so each candidate is probed with -c 'pass'.
+PY=""
+for p in python3 python; do
+  if "${p}" -c 'pass' >/dev/null 2>&1; then PY="${p}"; break; fi
+done
+if [[ -z "${PY}" ]]; then
+  PY="$(gcloud info --format='value(basic.python_location)')"
+fi
 TOKEN="$(gcloud auth print-access-token 2>/dev/null || ([ -f /workspace/.token ] && cat /workspace/.token) || true)"
 BASE="https://apigee.googleapis.com/v1/organizations/${ORG}/environments/${ENV}/apis/${PROXY}"
 

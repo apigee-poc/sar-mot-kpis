@@ -32,8 +32,8 @@ const FOLDERS = {
   faults: 'Fault injection (needs scratch config)'
 };
 
-// Catalog rows tested by the "Fault injection" folder. They need a scratch config deployed to dev
-// (D39 recipes); the requests are added by Task F to FAULT_INJECTION_REQUESTS below.
+// Catalog rows tested by the "Fault injection" folder (FAULT_INJECTION_REQUESTS below). They need
+// a scratch config deployed to dev first (scripts/fi-deploy.sh, D39 recipes).
 const FAULT_INJECTION_ROWS = [6, 7, 13, 16];
 
 // Catalog rows waived for P6 (D44): they need a scratch integration that cannot be produced from
@@ -197,8 +197,79 @@ const ERROR_REQUESTS = [
   { row: 12, name: 'quarter empty (quarter=)', query: [['year', '2025'], ['quarter', '']] }
 ];
 
-// Task F appends the rows 6, 7, 13, 16 requests here (same shape as ERROR_REQUESTS).
-const FAULT_INJECTION_REQUESTS = [];
+// Fault injection: one subfolder per scenario (run one with `--folder "<name>"`). Every request is
+// skipped unless the run sets `--env-var faultScenario=<one of scenarios>`, so a full-collection
+// run against a normal deploy never sends them. Request `expect`:
+//   'ok'      -> 200 (with `data` if given)
+//   'error'   -> the catalog row's status and message
+//   'errorOr200' -> the catalog row's error, or 200 (rate-limit windows that may still have room)
+// `freshMinute`: wait (pre-request) until a calendar minute has at least 20 s left, so a
+// per-minute quota window is not reset between the requests of the scenario.
+const FI_FIRST = { quarter: 1, year: 2025, actual: 1420500, loadTime: '2025-04-05T02:00:00Z' };
+const FULL_2025 = [
+  FI_FIRST,
+  { quarter: 2, year: 2025, actual: 1388200, loadTime: '2025-07-05T02:00:00Z' },
+  { quarter: 3, year: 2025, actual: 1512750, loadTime: '2025-10-05T02:00:00Z' }
+];
+
+const FAULT_INJECTION_REQUESTS = [
+  {
+    folder: 'FI-06 SpikeArrest 429',
+    scenarios: ['fi06'],
+    description: 'Catalog row 6 (SpikeArrestViolation -> 429). First deploy the scratch config: '
+      + '`bash scripts/fi-deploy.sh fi06` (spikeArrestRate=2pm, sliding window, UseEffectiveCount). '
+      + 'Then: `bash tests/run-newman.sh dev --folder "FI-06 SpikeArrest 429" --env-var faultScenario=fi06`. '
+      + 'Send nothing else with the test app in the minute before. Restore: `bash scripts/fi-restore.sh`. '
+      + 'A must pass (window empty); B-D may still fit the 2-per-minute window (200) or be 429; E must be 429.',
+    requests: [
+      { row: 6, name: 'A first request, within the rate', expect: 'ok', data: FULL_2025 },
+      { row: 6, name: 'B immediate second request', expect: 'errorOr200' },
+      { row: 6, name: 'C immediate third request', expect: 'errorOr200' },
+      { row: 6, name: 'D immediate fourth request', expect: 'errorOr200' },
+      { row: 6, name: 'E immediate fifth request', expect: 'error' }
+    ]
+  },
+  {
+    folder: 'FI-07 Quota 429',
+    scenarios: ['fi07'],
+    description: 'Catalog row 7 (QuotaViolation -> 429). First deploy the scratch config: '
+      + '`bash scripts/fi-deploy.sh fi07` (quotaLimit=2 per 1 minute, distributed, synchronous). '
+      + 'Then: `bash tests/run-newman.sh dev --folder "FI-07 Quota 429" --env-var faultScenario=fi07`. '
+      + 'Request A waits for a calendar minute with at least 20 s left, so A, B and C share one quota window. '
+      + 'Send nothing else with the test app in that minute. Restore: `bash scripts/fi-restore.sh`.',
+    requests: [
+      { row: 7, name: 'A first request in a fresh minute', expect: 'ok', data: FULL_2025, freshMinute: true },
+      { row: 7, name: 'B second request', expect: 'ok', data: FULL_2025 },
+      { row: 7, name: 'C third request in the same minute', expect: 'error' }
+    ]
+  },
+  {
+    folder: 'FI-13 Integration failure 500',
+    scenarios: ['fi13'],
+    description: 'Catalog row 13 (integration call fails -> 500 ERR-500-INTEGRATION). First deploy the scratch config: '
+      + '`bash scripts/fi-deploy.sh fi13` (triggerName=api_trigger/does-not-exist) and start a debug session '
+      + '(D39: record whether the IntegrationEndpoint raised a fault and its fault.name, V3/V9). '
+      + 'Then: `bash tests/run-newman.sh dev --folder "FI-13 Integration failure 500" --env-var faultScenario=fi13`. '
+      + 'The row 13 and row 16 messages are identical, so only the debug session shows which path ran. '
+      + 'Restore: `bash scripts/fi-restore.sh`.',
+    requests: [
+      { row: 13, name: 'unknown integration trigger', expect: 'error' }
+    ]
+  },
+  {
+    folder: 'FI-16 Unmapped fault 500',
+    scenarios: ['fi16', 'fi16b'],
+    description: 'Catalog row 16 (unmapped fault -> 500 ERR-SYS-500). First deploy the scratch config: '
+      + '`bash scripts/fi-deploy.sh fi16` (spikeArrestRate=abc; expected fault FailedToResolveSpikeArrestRate, '
+      + 'which is not in the error KVM). If this returns 200 (the invalid rate fell back to 30pm), restore and use '
+      + '`fi16b` (quotaTimeUnit=fortnight) with `--env-var faultScenario=fi16b`. '
+      + 'Then: `bash tests/run-newman.sh dev --folder "FI-16 Unmapped fault 500" --env-var faultScenario=fi16`. '
+      + 'Restore: `bash scripts/fi-restore.sh`.',
+    requests: [
+      { row: 16, name: 'unmapped fault from an invalid rate-limit config', expect: 'error' }
+    ]
+  }
+];
 
 const DEFAULT_HEADERS = [
   ['X-Request-Id', '{{requestId}}'],
@@ -233,7 +304,11 @@ function collectionTests() {
     '  pm.expect(expectedJson, \'pm.variables "expected" not set by the request pre-request script\').to.be.a(\'string\');',
     '});',
     'if (expectedJson) {',
-    '  const expected = JSON.parse(expectedJson);',
+    '  let expected = JSON.parse(expectedJson);',
+    '  // A request may allow one alternative outcome (e.g. a rate-limit window that still has room).',
+    '  if (expected.or && pm.response.code === expected.or.status) {',
+    '    expected = expected.or;',
+    '  }',
     '  const status = pm.response.code;',
     '  pm.test(\'status is \' + expected.status, function () {',
     '    pm.response.to.have.status(expected.status);',
@@ -320,7 +395,7 @@ function buildUrl(resourcePath, query) {
   return `{{baseUrl}}{{basePath}}${resourcePath}${qs ? `?${qs}` : ''}`;
 }
 
-function buildItem(name, spec, expected) {
+function buildItem(name, spec, expected, preLines) {
   const method = spec.method || 'GET';
   const request = {
     method,
@@ -338,7 +413,7 @@ function buildItem(name, spec, expected) {
         listen: 'prerequest',
         script: {
           type: 'text/javascript',
-          exec: [`pm.variables.set('expected', JSON.stringify(${JSON.stringify(expected)}));`]
+          exec: (preLines || []).concat([`pm.variables.set('expected', JSON.stringify(${JSON.stringify(expected)}));`])
         }
       }
     ],
@@ -358,6 +433,54 @@ function errorItem(spec, catalog) {
   return buildItem(`Row ${spec.row}: ${spec.name} -> ${entry.status}`, spec, expected);
 }
 
+// Pre-request lines of a fault-injection request: skip unless the run targets this scenario,
+// optionally wait for a calendar minute with enough time left (quota window).
+function faultPreLines(scenarios, freshMinute) {
+  const lines = [
+    `if (!${JSON.stringify(scenarios)}.includes(pm.variables.get('faultScenario'))) {`,
+    '  // Needs the matching scratch deploy (scripts/fi-deploy.sh) and --env-var faultScenario=<scenario>.',
+    '  pm.execution.skipRequest();',
+    '}'
+  ];
+  if (freshMinute) {
+    lines.push(
+      'const secondsIntoMinute = new Date().getUTCSeconds();',
+      'if (pm.variables.get(\'faultScenario\') && secondsIntoMinute > 40) {',
+      '  setTimeout(function () {}, (62 - secondsIntoMinute) * 1000);',
+      '}'
+    );
+  }
+  return lines;
+}
+
+function faultItem(group, spec, catalog) {
+  const entry = catalog[spec.row];
+  if (!entry) {
+    throw new Error(`Catalog row ${spec.row} not found in ${CATALOG_FILE}`);
+  }
+  const ok = { status: 200 };
+  if (spec.data) {
+    ok.data = spec.data;
+  }
+  const error = { row: spec.row, status: entry.status, message: entry.message };
+  let expected;
+  let suffix;
+  if (spec.expect === 'ok') {
+    expected = ok;
+    suffix = '200';
+  } else if (spec.expect === 'error') {
+    expected = error;
+    suffix = String(entry.status);
+  } else if (spec.expect === 'errorOr200') {
+    expected = Object.assign({}, error, { or: ok });
+    suffix = `${entry.status} or 200`;
+  } else {
+    throw new Error(`Unknown expect "${spec.expect}" in ${group.folder}`);
+  }
+  return buildItem(`Row ${spec.row}: ${spec.name} -> ${suffix}`, { query: YEAR_2025 }, expected,
+    faultPreLines(group.scenarios, spec.freshMinute));
+}
+
 function buildCollection(catalog) {
   const cat = catalog || readCatalog();
   const waivers = Object.keys(WAIVED_ROWS).map((row) => `- Row ${row} (${cat[row].status}) WAIVED: ${WAIVED_ROWS[row]}`);
@@ -370,7 +493,9 @@ function buildCollection(catalog) {
         'Generated by tests/tools/build-collection.js - do not edit by hand. Error texts come from docs/ERROR-CATALOG.md.',
         'Credentials are environment variables injected at run time (tests/run-newman.sh); none are stored here.',
         'Folders (use with newman --folder): "Happy paths" [smoke, read-only], "Error rows" [errors],',
-        '"Fault injection (needs scratch config)" [fault-injection, catalog rows 6, 7, 13, 16; run only against a D39 scratch deploy].',
+        '"Fault injection (needs scratch config)" [fault-injection, catalog rows 6, 7, 13, 16; subfolders "FI-06 SpikeArrest 429",',
+        '"FI-07 Quota 429", "FI-13 Integration failure 500", "FI-16 Unmapped fault 500"; skipped unless --env-var faultScenario is set;',
+        'run only against a scratch deploy from scripts/fi-deploy.sh, see tests/fault-injection/README.md].',
         'Waived catalog rows:',
         ...waivers
       ].join('\n'),
@@ -390,9 +515,15 @@ function buildCollection(catalog) {
       },
       {
         name: FOLDERS.faults,
-        description: `[fault-injection] Catalog rows ${FAULT_INJECTION_ROWS.join(', ')}. `
-          + 'Needs a scratch config/integration deployed to dev (D39 recipes); never run against a normal deploy.',
-        item: FAULT_INJECTION_REQUESTS.map((spec) => errorItem(spec, cat))
+        description: `[fault-injection] Catalog rows ${FAULT_INJECTION_ROWS.join(', ')}, one subfolder per scenario. `
+          + 'Dev only, one subfolder at a time, after `bash scripts/fi-deploy.sh <scenario>`; restore with '
+          + '`bash scripts/fi-restore.sh`. Requests are skipped unless --env-var faultScenario=<scenario> is set. '
+          + 'Procedure: tests/fault-injection/README.md.',
+        item: FAULT_INJECTION_REQUESTS.map((group) => ({
+          name: group.folder,
+          description: group.description,
+          item: group.requests.map((spec) => faultItem(group, spec, cat))
+        }))
       }
     ],
     event: [
@@ -411,6 +542,7 @@ module.exports = {
   FOLDERS,
   SCHEMAS,
   FAULT_INJECTION_ROWS,
+  FAULT_INJECTION_REQUESTS,
   WAIVED_ROWS,
   FAKE_API_KEY,
   FAKE_API_SECRET,
