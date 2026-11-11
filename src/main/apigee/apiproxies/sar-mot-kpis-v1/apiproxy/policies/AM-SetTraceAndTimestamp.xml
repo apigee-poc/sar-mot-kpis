@@ -22,6 +22,13 @@
     <Name>custom.messageId</Name>
     <Ref>messageid</Ref>
   </AssignVariable>
+  <!-- Inbound HTTP verb, captured before any integration call. After SIR/IntegrationEndpoint,
+       request.verb reads the outbound call's verb (POST) in the response phase, so flow
+       conditions use only custom.requestVerb (D36). request.verb always exists here. -->
+  <AssignVariable>
+    <Name>custom.requestVerb</Name>
+    <Ref>request.verb</Ref>
+  </AssignVariable>
   <!-- Flags read by FaultRule conditions: always defined, so no condition tests a missing variable (D33). -->
   <AssignVariable>
     <Name>custom.integrationCalled</Name>

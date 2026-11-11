@@ -121,6 +121,9 @@
     <Response/>
   </PreFlow>
   <Flows>
+    <!-- Flow conditions are evaluated again in the response phase. By then SIR has replaced
+         the request message, so request.verb reads the integration call's POST. They use the
+         inbound verb captured in AM-SetTraceAndTimestamp (custom.requestVerb), never request.* (D36). -->
     <Flow name="GetTotalFreight">
       <Description>GET /kpis/total_freight</Description>
       <Request>
@@ -172,7 +175,7 @@
           <Name>AM-BuildKpiResponse</Name>
         </Step>
       </Response>
-      <Condition>(proxy.pathsuffix MatchesPath "/kpis/total_freight") and (request.verb = "GET")</Condition>
+      <Condition>(proxy.pathsuffix MatchesPath "/kpis/total_freight") and (custom.requestVerb = "GET")</Condition>
     </Flow>
     <Flow name="MethodNotAllowed">
       <Description>Known path, verb other than GET</Description>
@@ -182,7 +185,7 @@
         </Step>
       </Request>
       <Response/>
-      <Condition>(proxy.pathsuffix MatchesPath "/kpis/total_freight") and (request.verb != "GET")</Condition>
+      <Condition>(proxy.pathsuffix MatchesPath "/kpis/total_freight") and (custom.requestVerb != "GET")</Condition>
     </Flow>
     <Flow name="NotFound">
       <Description>Catch-all: unknown path</Description>

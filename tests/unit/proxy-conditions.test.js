@@ -49,6 +49,13 @@ function readsRequestInput(condition) {
   return /request\.(?:header|queryparam)\.|request\.querystring/.test(condition);
 }
 
+// D36: after SIR/IntegrationEndpoint the request message is the outbound integration
+// call, so request.verb / request.path / request.uri / request.url change meaning in the
+// response phase. Conditions must use custom.requestVerb (captured in the PreFlow).
+function readsMutableRequestLine(condition) {
+  return /\brequest\.(?:verb|path|uri|url)\b/.test(condition);
+}
+
 function unguardedRequestRegex(condition) {
   const findings = [];
   const re = new RegExp(`(request\\.(?:header|queryparam)\\.[A-Za-z0-9_.-]+)\\s+${REGEX_OP}\\s`, 'g');
@@ -107,6 +114,47 @@ describe('proxy conditions: no missing-variable trap (D33, D34)', () => {
 
   it('no condition reads request.header / request.queryparam / request.querystring', () => {
     expect(conditions.filter(readsRequestInput)).to.deep.equal([]);
+  });
+
+  describe('inbound verb capture (D36)', () => {
+    it('the scanner flags request.verb / path / uri / url', () => {
+      expect(readsMutableRequestLine('(proxy.pathsuffix MatchesPath "/x") and (request.verb = "GET")')).to.equal(true);
+      expect(readsMutableRequestLine('request.path = "/a"')).to.equal(true);
+      expect(readsMutableRequestLine('request.uri ~~ ".*"')).to.equal(true);
+      expect(readsMutableRequestLine('custom.requestVerb != "GET"')).to.equal(false);
+      expect(readsMutableRequestLine('request.verbose = "x"')).to.equal(false);
+    });
+
+    it('no condition references request.verb / request.path / request.uri / request.url', () => {
+      expect(conditions.filter(readsMutableRequestLine)).to.deep.equal([]);
+    });
+
+    it('AM-SetTraceAndTimestamp (first PreFlow step) captures request.verb into custom.requestVerb', () => {
+      const am = fs.readFileSync(path.join(BUNDLE, 'policies', 'AM-SetTraceAndTimestamp.xml'), 'utf8');
+      expect(am).to.match(/<Name>custom\.requestVerb<\/Name>\s*<Ref>request\.verb<\/Ref>/);
+      const xml = fs.readFileSync(PROXY, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+      const preflow = xml.slice(xml.indexOf('<PreFlow'), xml.indexOf('</PreFlow>'));
+      const firstStep = /<Step>\s*<Name>([^<]+)<\/Name>/.exec(preflow);
+      expect(firstStep && firstStep[1]).to.equal('AM-SetTraceAndTimestamp');
+    });
+
+    it('request.verb is read only at the capture point (no other policy or resource reads it)', () => {
+      const policiesDir = path.join(BUNDLE, 'policies');
+      const readers = fs.readdirSync(policiesDir)
+        .filter((f) => /request\.verb\b/.test(fs.readFileSync(path.join(policiesDir, f), 'utf8').replace(/<!--[\s\S]*?-->/g, '')));
+      expect(readers).to.deep.equal(['AM-SetTraceAndTimestamp.xml']);
+      fs.readdirSync(JSC_DIR).filter((f) => f.endsWith('.js')).forEach((f) => {
+        expect(jscSource(f), f).to.not.match(/["']request\.verb["']/);
+      });
+    });
+
+    it('the routing flows use custom.requestVerb with the catalog semantics (404 / 405)', () => {
+      expect(conditions).to.include('(proxy.pathsuffix MatchesPath "/kpis/total_freight") and (custom.requestVerb = "GET")');
+      expect(conditions).to.include('(proxy.pathsuffix MatchesPath "/kpis/total_freight") and (custom.requestVerb != "GET")');
+      const xml = fs.readFileSync(PROXY, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+      const notFound = xml.slice(xml.indexOf('<Flow name="NotFound">'), xml.indexOf('</Flows>'));
+      expect(notFound).to.not.contain('<Condition>'); // unconditional catch-all, last
+    });
   });
 
   it('no regex test on request.header / request.queryparam lacks explicit null and empty guards', () => {
