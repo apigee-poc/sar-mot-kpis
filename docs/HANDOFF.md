@@ -263,7 +263,7 @@ See the policy table in `docs/PLAN.md` section "P5 — Apigee proxy" for the ful
 
 | Policy | Type | Purpose |
 |---|---|---|
-| `AM-SetTraceAndTimestamp` | AssignMessage | Set `custom.traceId = messageid`, `custom.timestamp` = ISO-8601 UTC |
+| `AM-SetTraceAndTimestamp` | AssignMessage | Set `custom.traceId = {createUuid()}` (D33), `custom.timestamp` = ISO-8601 UTC |
 | `KVM-GetConfig` | KeyValueMapOperations | Read from `sar-mot-kpis-config-__KVM_VERSION__` (incl. per-env integration name + trigger name) |
 | `RF-InvalidRequestId` | RaiseFault | Missing or non-UUID X-Request-Id → ERR-400-REQUESTID |
 | `AM-SetClientTraceId` | AssignMessage | Overwrite `custom.traceId` with `X-Request-Id` header |

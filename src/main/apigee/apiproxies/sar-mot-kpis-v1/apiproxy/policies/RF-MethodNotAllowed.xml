@@ -8,6 +8,10 @@
       <Name>custom.errorCode</Name>
       <Value>ERR-405-METHOD</Value>
     </AssignVariable>
+    <AssignVariable>
+      <Name>custom.proxyFault</Name>
+      <Value>true</Value>
+    </AssignVariable>
     <Set>
       <Headers>
         <Header name="Allow">GET</Header>

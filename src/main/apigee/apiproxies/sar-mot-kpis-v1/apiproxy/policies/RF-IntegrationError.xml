@@ -8,6 +8,10 @@
       <Name>custom.errorCode</Name>
       <Value>ERR-500-INTEGRATION</Value>
     </AssignVariable>
+    <AssignVariable>
+      <Name>custom.proxyFault</Name>
+      <Value>true</Value>
+    </AssignVariable>
     <Set>
       <StatusCode>500</StatusCode>
       <ReasonPhrase>Internal Server Error</ReasonPhrase>

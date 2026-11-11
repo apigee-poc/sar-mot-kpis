@@ -11,10 +11,25 @@
     <Name>custom.timestamp</Name>
     <Template>{timeFormatUTCMs(iso8601Format,system.timestamp)}</Template>
   </AssignVariable>
-  <!-- Default trace ID: Apigee messageid. AM-SetClientTraceId replaces it with a valid X-Request-Id (D7). -->
+  <!-- Default trace ID: a generated UUID (the OAS requires format uuid; Apigee's messageid
+       is not one, D33). AM-SetClientTraceId replaces it with a valid X-Request-Id (D7). -->
   <AssignVariable>
     <Name>custom.traceId</Name>
+    <Template>{createUuid()}</Template>
+  </AssignVariable>
+  <!-- Apigee's own message ID, kept for log correlation only. -->
+  <AssignVariable>
+    <Name>custom.messageId</Name>
     <Ref>messageid</Ref>
+  </AssignVariable>
+  <!-- Flags read by FaultRule conditions: always defined, so no condition tests a missing variable (D33). -->
+  <AssignVariable>
+    <Name>custom.integrationCalled</Name>
+    <Value>false</Value>
+  </AssignVariable>
+  <AssignVariable>
+    <Name>custom.proxyFault</Name>
+    <Value>false</Value>
   </AssignVariable>
   <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
 </AssignMessage>

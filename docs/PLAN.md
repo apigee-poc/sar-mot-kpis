@@ -225,7 +225,7 @@ identifiers, stamped by the pipeline.
 
 | Stage | Policy | Purpose |
 |---|---|---|
-| PreFlow req | `AM-SetTraceAndTimestamp` | `custom.traceId = messageid`; `custom.timestamp` = ISO-8601 UTC (e.g. `timeFormatUTCMs` in a message template; VERIFY exact syntax in the emulator) |
+| PreFlow req | `AM-SetTraceAndTimestamp` | `custom.traceId = {createUuid()}` (not `messageid`, which is not a UUID, D33); `custom.timestamp` = ISO-8601 UTC (e.g. `timeFormatUTCMs` in a message template; VERIFY exact syntax in the emulator) |
 | | `KVM-GetConfig` | `sar-mot-kpis-config-__KVM_VERSION__`: integrationName, triggerName (`api_trigger/sar-kpi-get-<env>`, D22), projectId, region, spikeArrestRate, quotaLimit, quotaInterval, quotaTimeUnit, maxClockSkewSeconds, allowedKpis |
 | | `RF-InvalidRequestId` | missing or not a UUID → `ERR-400-REQUESTID` |
 | | `AM-SetClientTraceId` | `custom.traceId = request.header.X-Request-Id` |

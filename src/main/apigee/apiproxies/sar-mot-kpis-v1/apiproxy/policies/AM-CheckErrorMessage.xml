@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-CheckErrorMessage">
+  <DisplayName>AM-CheckErrorMessage</DisplayName>
+  <!-- custom.errorMessageState always exists: the KVM message, or __none__ when the
+       lookup found nothing. DefaultFaultRule conditions test this instead of a possibly
+       missing custom.errorMessage (D33). -->
+  <AssignVariable>
+    <Name>custom.errorMessageState</Name>
+    <Ref>custom.errorMessage</Ref>
+    <Value>__none__</Value>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

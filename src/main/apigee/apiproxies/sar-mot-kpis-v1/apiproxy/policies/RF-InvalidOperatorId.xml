@@ -8,6 +8,10 @@
       <Name>custom.errorCode</Name>
       <Value>ERR-400-OPERATOR</Value>
     </AssignVariable>
+    <AssignVariable>
+      <Name>custom.proxyFault</Name>
+      <Value>true</Value>
+    </AssignVariable>
     <Set>
       <StatusCode>400</StatusCode>
       <ReasonPhrase>Bad Request</ReasonPhrase>

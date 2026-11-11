@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-CaptureRequestInputs">
+  <DisplayName>AM-CaptureRequestInputs</DisplayName>
+  <!--
+    Copies the validated headers and query parameters into variables that ALWAYS exist.
+    When the header/param is missing, <Ref> does not resolve and <Value> (the sentinel
+    __absent__) is used instead. The RF-* conditions then test only these variables, so
+    a missing header can never make a condition evaluate false and skip its check
+    (observed in dev: a missing X-Request-Id skipped RF-InvalidRequestId, D33).
+    The operator ID is a personal identifier: its copy uses the private. prefix, which
+    hides it in debug sessions.
+  -->
+  <AssignVariable>
+    <Name>custom.input.requestId</Name>
+    <Ref>request.header.X-Request-Id</Ref>
+    <Value>__absent__</Value>
+  </AssignVariable>
+  <AssignVariable>
+    <Name>private.input.operatorId</Name>
+    <Ref>request.header.X-Operator-Id</Ref>
+    <Value>__absent__</Value>
+  </AssignVariable>
+  <AssignVariable>
+    <Name>custom.input.year</Name>
+    <Ref>request.queryparam.year</Ref>
+    <Value>__absent__</Value>
+  </AssignVariable>
+  <AssignVariable>
+    <Name>custom.input.quarter</Name>
+    <Ref>request.queryparam.quarter</Ref>
+    <Value>__absent__</Value>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

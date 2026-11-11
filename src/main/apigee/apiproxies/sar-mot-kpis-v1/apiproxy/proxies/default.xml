@@ -24,7 +24,7 @@
       <Condition>(fault.name = "SpikeArrestViolation") or (fault.name = "QuotaViolation")</Condition>
     </FaultRule>
     <!-- Faults from the integration call. Faults raised by our own RF-* policies
-         (e.g. RF-BadGateway in the response flow) set custom.errorCode and are excluded.
+         (e.g. RF-BadGateway in the response flow) set custom.proxyFault = "true" and are excluded.
          ERROR-CATALOG row 15: timeout / unavailable -> 504; row 13: anything else -> 500. -->
     <FaultRule name="integration-fault">
       <Step>
@@ -35,7 +35,7 @@
         <Name>AM-SetIntegrationError</Name>
         <Condition>(fault.name != "GatewayTimeout") and (fault.name != "ServiceUnavailable")</Condition>
       </Step>
-      <Condition>(custom.integrationCalled = "true") and (custom.errorCode = null)</Condition>
+      <Condition>(custom.integrationCalled = "true") and (custom.proxyFault != "true")</Condition>
     </FaultRule>
   </FaultRules>
   <DefaultFaultRule name="default-fault">
@@ -46,14 +46,17 @@
       <Name>KVM-GetErrorMessage</Name>
     </Step>
     <Step>
+      <Name>AM-CheckErrorMessage</Name>
+    </Step>
+    <Step>
       <Name>AM-SetSystemError</Name>
-      <Condition>custom.errorMessage = null</Condition>
+      <Condition>custom.errorMessageState = "__none__"</Condition>
     </Step>
     <!-- Second read: the ERR-SYS-500 message also comes from the KVM. AM-BuildErrorResponse
          keeps a literal only as a last resort when the error KVM is unreachable. -->
     <Step>
       <Name>KVM-GetErrorMessage</Name>
-      <Condition>custom.errorMessage = null</Condition>
+      <Condition>custom.errorMessageState = "__none__"</Condition>
     </Step>
     <Step>
       <Name>AM-BuildErrorResponse</Name>
@@ -69,15 +72,16 @@
         <Name>AM-SetTraceAndTimestamp</Name>
       </Step>
       <Step>
+        <Name>AM-CaptureRequestInputs</Name>
+      </Step>
+      <Step>
         <Name>KVM-GetConfig</Name>
       </Step>
+      <!-- Conditions test only variables that always exist (captured inputs with the
+           __absent__ sentinel, JS flags): a missing header must not skip a check (D33). -->
       <Step>
         <Name>RF-InvalidRequestId</Name>
-        <Condition>request.header.X-Request-Id = null</Condition>
-      </Step>
-      <Step>
-        <Name>RF-InvalidRequestId</Name>
-        <Condition>!(request.header.X-Request-Id JavaRegex "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")</Condition>
+        <Condition>!(custom.input.requestId JavaRegex "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")</Condition>
       </Step>
       <Step>
         <Name>AM-SetClientTraceId</Name>
@@ -110,7 +114,7 @@
       </Step>
       <Step>
         <Name>RF-InvalidOperatorId</Name>
-        <Condition>(request.header.X-Operator-Id = null) or !(request.header.X-Operator-Id JavaRegex "[12][0-9]{9}")</Condition>
+        <Condition>!(private.input.operatorId JavaRegex "[12][0-9]{9}")</Condition>
       </Step>
     </Request>
     <Response/>
@@ -131,11 +135,11 @@
         </Step>
         <Step>
           <Name>RF-InvalidQueryParams</Name>
-          <Condition>(request.queryparam.year = null) or !(request.queryparam.year JavaRegex "20[0-9]{2}")</Condition>
+          <Condition>!(custom.input.year JavaRegex "20[0-9]{2}")</Condition>
         </Step>
         <Step>
           <Name>RF-InvalidQueryParams</Name>
-          <Condition>(request.queryparam.quarter != null) and !(request.queryparam.quarter JavaRegex "[1-4]")</Condition>
+          <Condition>(custom.input.quarter != "__absent__") and !(custom.input.quarter JavaRegex "[1-4]")</Condition>
         </Step>
         <Step>
           <!-- "quarter=" present but empty: 400, independent of how Apigee treats an empty param -->

@@ -4,7 +4,7 @@ Every error response uses the OAS `ErrorResponse` envelope:
 
 ```json
 {
-  "header": { "timestamp": "2026-10-14T08:30:01Z", "traceId": "<X-Request-Id or messageid>", "isSuccess": false },
+  "header": { "timestamp": "2026-10-14T08:30:01Z", "traceId": "<X-Request-Id, or a generated UUID>", "isSuccess": false },
   "error":  { "code": 400, "message": "<from KVM>" }
 }
 ```
@@ -16,7 +16,7 @@ The lookup key (column 3) is internal: it selects the message from the
 
 ## Evaluation order in the proxy
 
-1. Set timestamp + default trace ID (`messageid`); load config KVM.
+1. Set timestamp + default trace ID (a generated UUID, `createUuid()`, D33); load config KVM.
 2. Validate `X-Request-Id` (required, UUID). If valid, it becomes the trace ID.
 3. Verify API key → verify secret → SpikeArrest → Quota.
 4. Validate `X-Request-Timestamp` and `X-Operator-Id`.

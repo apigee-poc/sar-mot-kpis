@@ -8,6 +8,10 @@
       <Name>custom.errorCode</Name>
       <Value>ERR-502-GATEWAY</Value>
     </AssignVariable>
+    <AssignVariable>
+      <Name>custom.proxyFault</Name>
+      <Value>true</Value>
+    </AssignVariable>
     <Set>
       <StatusCode>502</StatusCode>
       <ReasonPhrase>Bad Gateway</ReasonPhrase>

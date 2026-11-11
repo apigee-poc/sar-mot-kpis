@@ -6,6 +6,8 @@
   <Policies>
     <Policy>AM-BuildErrorResponse</Policy>
     <Policy>AM-BuildKpiResponse</Policy>
+    <Policy>AM-CaptureRequestInputs</Policy>
+    <Policy>AM-CheckErrorMessage</Policy>
     <Policy>AM-SetClientTraceId</Policy>
     <Policy>AM-SetIntegrationCalled</Policy>
     <Policy>AM-SetIntegrationError</Policy>
