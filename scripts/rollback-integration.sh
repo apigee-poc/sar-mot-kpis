@@ -19,6 +19,8 @@ BASE="https://integrations.googleapis.com/v1/projects/${PROJECT}/locations/${REG
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 RESP="${WORK}/resp.json"
+EMPTY_BODY="${WORK}/empty.json"
+printf '{}' > "${EMPTY_BODY}"
 
 # api <METHOD> <URL> [json_body_file]
 # Writes the response body to ${RESP}. Returns 0 on HTTP 2xx; otherwise prints the API error
@@ -29,6 +31,7 @@ api() {
   if [[ -n "${data}" ]]; then
     args+=(-H "Content-Type: application/json" --data-binary "@${data}")
   fi
+  : > "${RESP}"
   code="$(curl "${args[@]}" "${url}" 2>/dev/null || echo "000")"
   if [[ "${code}" =~ ^2[0-9][0-9]$ ]]; then
     return 0
@@ -62,7 +65,7 @@ version_state() {
 unpublish_verified() {
   local ver="$1" state
   # Unpublish errors (e.g. "not ACTIVE") are tolerated here; the state check below decides.
-  api POST "${BASE}/${ver}:unpublish" || true
+  api POST "${BASE}/${ver}:unpublish" "${EMPTY_BODY}" || true
   state="$(version_state "${ver}")"
   if [[ -n "${state}" && "${state}" != "ACTIVE" ]]; then
     echo "Version ${ver} is no longer ACTIVE (state: ${state})."
@@ -98,8 +101,7 @@ with open(sys.argv[2], "w") as f:
     return 1
   fi
   echo "Publishing restored version ${new_id}..."
-  printf '{}' > "${WORK}/empty.json"
-  api POST "${BASE}/${new_id}:publish" "${WORK}/empty.json" || return 1
+  api POST "${BASE}/${new_id}:publish" "${EMPTY_BODY}" || return 1
 
   echo "Waiting for restored version ${new_id} to reach ACTIVE state..."
   deadline=$((SECONDS + 300))
