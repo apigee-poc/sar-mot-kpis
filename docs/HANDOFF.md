@@ -158,7 +158,7 @@ integration/
 Integrations `sar-kpi-get-dev` and `sar-kpi-get-staging` (source: `integration/<env>/src/`) with:
 - **API trigger:** `api_trigger/sar-kpi-get-<env>` (per env, D22)
 - **Input parameters:** `kpiCode` (STRING), `year` (INT), `quarter` (INT, nullable — 0 means absent)
-- **Output parameter:** `data` (JSON_VALUE, default `[]`)
+- **Output parameter:** `data` (JSON_VALUE) = `{"records": [KpiRecord…]}`, default `{"records": []}` (D26)
 
 ### SQL query (task: ExecuteCustomQuery)
 ```sql
@@ -180,10 +180,10 @@ Query parameters: `[kpiCode VARCHAR, year INTEGER, quarter INTEGER, quarter INTE
    the override sets it again.
 3. **`JS-TransformOutput`** (JavaScriptTask) — reads `` `Task_2_connectorOutputPayload` ``
    (auto-generated variables need backticks), maps rows to `KpiRecord` (`Number()` for numbers,
-   `load_time` → `YYYY-MM-DDTHH:MM:SSZ`) and sets `data` with `JSON.stringify(array)` (`"[]"` when no
-   rows); it throws on bad input. Setting a bare JS array on a JSON_VALUE variable fails at
-   runtime with "The value assigned to data is not a Json value" (seen in dev); a plain object
-   (task 1) and JSON text are accepted. The scripts live inline in the src JSON and are unit-tested in
+   `load_time` → `YYYY-MM-DDTHH:MM:SSZ`) and sets `data` with `event.setParameter("data", {records: result})`
+   (`{records: []}` when no rows); it throws on bad input. In dev, both a bare JS array and
+   `JSON.stringify(array)` on a JSON_VALUE variable fail with "The value assigned to data is not a
+   Json value"; only a plain object is accepted (D26). The scripts live inline in the src JSON and are unit-tested in
    `tests/unit/integration-sar-kpi-get.test.js`.
 
 All three tasks use `failurePolicy` and `synchronousCallFailurePolicy` `FATAL`.
@@ -213,7 +213,7 @@ All three tasks use `failurePolicy` and `synchronousCallFailurePolicy` `FATAL`.
 |---|---|---|---|---|
 | `test-2025-full-year.json` | total_freight | 2025 | 0 (all) | 3 rows |
 | `test-2025-q3.json` | total_freight | 2025 | 3 | 1 row (actual=1512750) |
-| `test-2026-empty.json` | total_freight | 2026 | 0 (all) | 0 rows (`data: []`) |
+| `test-2026-empty.json` | total_freight | 2026 | 0 (all) | 0 rows (`data: {"records": []}`) |
 | `test-2024-full-year.json` | total_freight | 2024 | 0 (all) | 4 rows |
 
 ### Deploy commands (PowerShell)
@@ -245,7 +245,7 @@ and its `userLabel` is the SHORT_SHA.
 ### P4 Acceptance checks
 - [ ] Both integrations published, label = SHORT_SHA
 - [ ] All 4 test cases pass in both dev and staging
-- [ ] API execution returns `data` in OAS shape
+- [ ] API execution returns `data.records` in OAS `KpiRecord[]` shape
 - [ ] `docs/PLAN.md` P4 status updated to `DONE (<sha>)`
 - [ ] Commit: `git commit -m "P4: application integration sar-kpi-get dev and staging"`
 
@@ -276,9 +276,9 @@ See `docs/PLAN.md` lines 210–232 for the full table. Key policies:
 | `AM-SetKpiCode` | AssignMessage | Set `kpi.code = total_freight` |
 | `SIR-SetIntegrationRequest` | SetIntegrationRequest | Integration name, trigger name (`api_trigger/sar-kpi-get-<env>`, D22), project, region from KVM |
 | `RF-IntegrationError` | RaiseFault | Non-2xx from integration → ERR-500-INTEGRATION |
-| `EV-ExtractIntegrationOutput` | ExtractVariables | JSONPath to `data` output param |
-| `RF-BadGateway` | RaiseFault | Missing/non-array/too-many items → ERR-502-GATEWAY |
-| `AM-BuildKpiResponse` | AssignMessage | Build 200 response |
+| `EV-ExtractIntegrationOutput` | ExtractVariables | JSONPath `$.outputParameters.data.records` (D26) |
+| `RF-BadGateway` | RaiseFault | `data.records` missing/non-array/> 4 items → ERR-502-GATEWAY |
+| `AM-BuildKpiResponse` | AssignMessage | Build 200 response; OAS `data` = the `records` array |
 | `RF-MethodNotAllowed` | RaiseFault | ERR-405-METHOD |
 | `RF-ResourceNotFound` | RaiseFault | ERR-404-RESOURCE |
 | `AM-SetLookupKey` + `KVM-GetErrorMessage` + `AM-BuildErrorResponse` | DefaultFaultRule | Integer error.code, escapeJSON message |
@@ -286,9 +286,9 @@ See `docs/PLAN.md` lines 210–232 for the full table. Key policies:
 
 ### VERIFY items for P5
 1. Exact response shape of IntegrationEndpoint — where `data` sits in the JSON (needs debug session).
-   `data` is set from JSON text; check whether the execute response carries it as a JSON array
-   (ExtractVariables JSONPath on the array) or as a string holding JSON (then `JSON.parse` in a JS
-   policy before `RF-BadGateway` checks / `AM-BuildKpiResponse`).
+   The integration output `data` is the object `{"records": [...]}` (D26); confirm the path
+   (expected `$.outputParameters.data.records`) and that `records` arrives as a JSON array, not a
+   string. If it arrives as a string, `JSON.parse` it in a JS policy before `RF-BadGateway`.
 2. Default HTTP statuses of VerifyAPIKey/SpikeArrest/Quota faults — may need overrides
 3. Message-template syntax for ISO timestamp in AssignMessage
 

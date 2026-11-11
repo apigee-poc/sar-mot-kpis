@@ -183,9 +183,9 @@ tester or a throwaway integration returns the seed rows for its own database onl
      ORDER BY quarter
      ```
    - Task 1 `JS-BuildConnectorInput` (JavaScript, D24) builds the query input (quarter 0 →
-     NULL); task 3 `JS-TransformOutput` (JavaScript) maps the rows into output `data` (JSON array of `KpiRecord`): `load_time` → `loadTime` as
-     ISO-8601 UTC `YYYY-MM-DDTHH:MM:SSZ`, `actual` as a number, and `[]` (never null) when
-     there are no rows.
+     NULL); task 3 `JS-TransformOutput` (JavaScript) maps the rows into output `data` = `{"records": [KpiRecord…]}` (D26; a JSON variable only
+     accepts an object): `load_time` → `loadTime` as ISO-8601 UTC `YYYY-MM-DDTHH:MM:SSZ`, `actual`
+     as a number, and `{"records": []}` (never null) when there are no rows.
    - On task failure, end with an error so Apigee sees a non-2xx response. No partial data.
 2. Keep it in the repo as one apply root per env (D20, D21):
    `integration/<env>/src/sar-kpi-get-<env>.json` (the file name is the integration name; each
@@ -209,7 +209,7 @@ tester or a throwaway integration returns the seed rows for its own database onl
    mirroring `get-deployed-revision.sh` / `rollback.sh`.
 
 **Acceptance:** both integrations are published with the commit SHA as label; test cases
-pass; executing via API returns `data` in the exact OAS shape.
+pass; executing via API returns `data.records` in the exact OAS `KpiRecord[]` shape.
 
 ---
 
@@ -235,9 +235,9 @@ identifiers, stamped by the pipeline.
 | | `AM-SetKpiCode` | `kpi.code = total_freight` |
 | | `SIR-SetIntegrationRequest` | name, trigger name, project and region read via `ref` from the KVM; parameters `kpiCode`, `year`, `quarter` (omit quarter when absent) |
 | resp | `RF-IntegrationError` | status ≠ 2xx → `ERR-500-INTEGRATION` |
-| | `EV-ExtractIntegrationOutput` | JSONPath to the `data` output parameter (VERIFY the response shape with a debug session) |
-| | `RF-BadGateway` | output missing, not an array, or > 4 items → `ERR-502-GATEWAY` |
-| | `AM-BuildKpiResponse` | `{header:{timestamp,traceId,isSuccess:true}, data:<array>}`, 200 |
+| | `EV-ExtractIntegrationOutput` | JSONPath `$.outputParameters.data.records` (integration output is `{records:[…]}`, D26; VERIFY the exact path with a debug session) |
+| | `RF-BadGateway` | `data.records` missing, not an array, or > 4 items → `ERR-502-GATEWAY` |
+| | `AM-BuildKpiResponse` | `{header:{timestamp,traceId,isSuccess:true}, data:<records array>}`, 200 |
 | Flow `MethodNotAllowed` | `RF-MethodNotAllowed` | `ERR-405-METHOD` |
 | Flow `NotFound` (catch-all) | `RF-ResourceNotFound` | `ERR-404-RESOURCE` |
 | FaultRule (403) | `AM-SetStatus403` | `fault.name = "InvalidApiKeyForGivenResource"` |

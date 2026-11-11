@@ -71,7 +71,7 @@
           "parameter": {
             "key": "data",
             "value": {
-              "jsonValue": "[{\"quarter\":3,\"year\":2025,\"actual\":1512750,\"loadTime\":\"2025-10-05T02:00:00Z\"}]"
+              "jsonValue": "{\"records\":[{\"quarter\":3,\"year\":2025,\"actual\":1512750,\"loadTime\":\"2025-10-05T02:00:00Z\"}]}"
             }
           }
         }

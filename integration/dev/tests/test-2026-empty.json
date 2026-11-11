@@ -1,6 +1,6 @@
 {
   "displayName": "test-2026-empty",
-  "description": "total_freight 2026: no rows, data is [].",
+  "description": "total_freight 2026: no rows, data is {records: []}.",
   "triggerId": "api_trigger/sar-kpi-get-dev",
   "testInputParameters": [
     {
@@ -71,7 +71,7 @@
           "parameter": {
             "key": "data",
             "value": {
-              "jsonValue": "[]"
+              "jsonValue": "{\"records\":[]}"
             }
           }
         }

@@ -18,9 +18,9 @@ function task(integration, taskId) {
   return integration.taskConfigs.find((t) => t.taskId === taskId);
 }
 
-// JSON_VALUE variables written by the scripts. On the real runtime, setParameter on a JSON
-// variable rejects a bare JS array ("The value assigned to data is not a Json value", seen in
-// dev); a plain object (task 1 -> connector input) and a JSON string are accepted.
+// JSON_VALUE variables written by the scripts. On the real runtime (seen in dev), setParameter
+// on a JSON variable rejects both a bare JS array and JSON text ("The value assigned to data is
+// not a Json value"); only a plain object (task 1 -> connector input) is accepted (D26).
 const JSON_VARS = ['data', '`Task_2_connectorInputPayload`'];
 
 // Runs an embedded JavaScriptTask script against a mock event.
@@ -29,15 +29,8 @@ function runScript(script, params) {
   const event = {
     getParameter: (k) => params[k],
     setParameter: (k, v) => {
-      if (JSON_VARS.includes(k)) {
-        if (Array.isArray(v)) {
-          throw new Error(`The value assigned to ${k} is not a Json value`);
-        }
-        if (typeof v === 'string') {
-          JSON.parse(v); // must be JSON text
-        } else if (v === null || typeof v !== 'object') {
-          throw new Error(`The value assigned to ${k} is not a Json value`);
-        }
+      if (JSON_VARS.includes(k) && (v === null || typeof v !== 'object' || Array.isArray(v))) {
+        throw new Error(`The value assigned to ${k} is not a Json value`);
       }
       out[k] = v;
     },
@@ -50,17 +43,17 @@ function runScript(script, params) {
   return JSON.parse(JSON.stringify(out));
 }
 
-// Runs JS-TransformOutput and returns the raw value it set on `data`.
-function transformRaw(script, params) {
-  const raw = runScript(script, params).data;
-  expect(raw, 'data must be set as JSON text (string), not a JS array').to.be.a('string');
-  return raw;
+// Runs JS-TransformOutput and returns the object it set on `data` ({records: [...]}).
+function transformData(script, params) {
+  const data = runScript(script, params).data;
+  expect(data, 'data must be a plain object').to.be.an('object');
+  expect(Object.keys(data)).to.deep.equal(['records']);
+  expect(data.records).to.be.an('array');
+  return data;
 }
 
 function transform(script, params) {
-  const data = JSON.parse(transformRaw(script, params));
-  expect(data).to.be.an('array');
-  return data;
+  return transformData(script, params).records;
 }
 
 const integration = readJson(srcFile('dev'));
@@ -190,19 +183,19 @@ describe('integration sar-kpi-get: JS-TransformOutput (task 3)', () => {
     expect(transform(transformScript, { [key]: rows })).to.deep.equal([{ quarter: 3, year: 2025, actual: 1512750, loadTime: '2025-10-05T02:00:00Z' }]);
   });
 
-  it('returns [] (never null) when there are no rows', () => {
+  it('returns {records: []} (never null) when there are no rows', () => {
     [[], null, undefined, '', '[]'].forEach((empty) => {
-      expect(transformRaw(transformScript, { [key]: empty })).to.equal('[]');
+      expect(transformData(transformScript, { [key]: empty })).to.deep.equal({ records: [] });
     });
   });
 
   it('fails the task on an unparseable load_time', () => {
-    expect(() => transformRaw(transformScript, { [key]: [{ quarter: 1, year: 2025, actual: 1, load_time: 'bad' }] }))
+    expect(() => transformData(transformScript, { [key]: [{ quarter: 1, year: 2025, actual: 1, load_time: 'bad' }] }))
       .to.throw(/Invalid load_time/);
   });
 
   it('fails the task when the payload is not an array', () => {
-    expect(() => transformRaw(transformScript, { [key]: { error: 'x' } })).to.throw(/not an array/);
+    expect(() => transformData(transformScript, { [key]: { error: 'x' } })).to.throw(/not an array/);
   });
 
   it('produces exactly the data asserted by each test case from the seed rows', () => {
@@ -222,7 +215,8 @@ describe('integration sar-kpi-get: JS-TransformOutput (task 3)', () => {
         const rows = seed.filter((r) => r.year === year && (quarter === 0 || r.quarter === quarter));
         const expected = tc.testTaskConfigs.find((t) => t.taskNumber === '3')
           .assertions.find((a) => a.assertionStrategy === 'ASSERT_EQUALS').parameter.value.jsonValue;
-        expect(transformRaw(transformScript, { [key]: rows })).to.equal(expected);
+        // The real script output, serialised compactly, equals the ASSERT_EQUALS jsonValue.
+        expect(JSON.stringify(transformData(transformScript, { [key]: rows }))).to.equal(expected);
       });
     });
   });
