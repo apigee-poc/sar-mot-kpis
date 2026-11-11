@@ -9,7 +9,7 @@ Agents update the status line of a phase when they start or finish it.
 | P0 | Repo bootstrap | DONE (505f7b7) |
 | P1 | Non-prod foundation (APIs, service accounts, IAM) | DONE (cbf1347) |
 | P2 | Private Cloud SQL + mock data | DONE (b5813cf) |
-| P3 | Integration Connector (private) | TODO |
+| P3 | Integration Connector (private) | DONE (8987442) |
 | P4 | Application Integration | TODO |
 | P5 | Apigee proxy | TODO |
 | P6 | Tests (unit, Newman, integration tests) | TODO |
