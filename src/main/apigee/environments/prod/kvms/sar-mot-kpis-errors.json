@@ -1,0 +1,25 @@
+{
+  "name": "sar-mot-kpis-errors",
+  "encrypted": true,
+  "entries": [
+    { "name": "ERR-400-REQUESTID", "value": "Header 'X-Request-Id' is required and must be a valid UUID." },
+    { "name": "FailedToResolveAPIKey", "value": "Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers." },
+    { "name": "InvalidApiKey", "value": "Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers." },
+    { "name": "ApiKeyNotApproved", "value": "Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers." },
+    { "name": "DeveloperStatusNotActive", "value": "Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers." },
+    { "name": "invalid_client-app_not_approved", "value": "Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers." },
+    { "name": "ERR-401-SECRET", "value": "Invalid or missing credentials in 'X-API-Key' or 'X-API-Secret' headers." },
+    { "name": "InvalidApiKeyForGivenResource", "value": "API Key is not associated with an approved API Product for KPI data sharing." },
+    { "name": "SpikeArrestViolation", "value": "Rate limit has been exceeded." },
+    { "name": "QuotaViolation", "value": "Rate limit has been exceeded." },
+    { "name": "ERR-400-TIMESTAMP", "value": "Header 'X-Request-Timestamp' is required and must be a UTC ISO-8601 date-time within the allowed clock skew." },
+    { "name": "ERR-400-OPERATOR", "value": "Header 'X-Operator-Id' is required and must be a valid 10-digit National ID or Iqama number." },
+    { "name": "ERR-404-RESOURCE", "value": "Requested resource was not found. Please verify the API path." },
+    { "name": "ERR-405-METHOD", "value": "HTTP method not allowed. Only 'GET' operations are supported on this endpoint." },
+    { "name": "ERR-400-PARAMS", "value": "Query parameter 'quarter' must be an integer between 1 and 4, and 'year' must be a valid 4-digit Gregorian year (2000-2099)." },
+    { "name": "ERR-500-INTEGRATION", "value": "An unexpected error occurred. Quote the traceId when contacting support." },
+    { "name": "ERR-502-GATEWAY", "value": "Invalid or malformed response received from backend service." },
+    { "name": "ERR-504-TIMEOUT", "value": "The request timed out. The service is temporarily unavailable." },
+    { "name": "ERR-SYS-500", "value": "An unexpected error occurred. Quote the traceId when contacting support." }
+  ]
+}

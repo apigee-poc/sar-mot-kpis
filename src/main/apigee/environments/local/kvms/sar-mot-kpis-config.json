@@ -1,0 +1,17 @@
+{
+  "name": "sar-mot-kpis-config",
+  "encrypted": true,
+  "entries": [
+    { "name": "integrationName", "value": "sar-kpi-get-dev" },
+    { "name": "triggerName", "value": "api_trigger/sar-kpi-get-dev" },
+    { "name": "projectId", "value": "apigee-nonprod-511322" },
+    { "name": "region", "value": "us-central1" },
+    { "name": "spikeArrestRate", "value": "600pm" },
+    { "name": "quotaLimit", "value": "1000" },
+    { "name": "quotaInterval", "value": "1" },
+    { "name": "quotaTimeUnit", "value": "minute" },
+    { "name": "maxClockSkewSeconds", "value": "300" },
+    { "name": "allowedKpis", "value": "total_freight" },
+    { "name": "commit", "value": "__KVM_VERSION__" }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "namespaces": {},
+  "faultJSONPaths": [],
+  "faultXPaths": [],
+  "requestJSONPaths": [],
+  "requestXPaths": [],
+  "responseJSONPaths": [],
+  "responseXPaths": [],
+  "variables": [
+    "request.header.x-api-key",
+    "request.header.X-API-Key",
+    "request.header.x-api-secret",
+    "request.header.X-API-Secret",
+    "request.header.x-operator-id",
+    "request.header.X-Operator-Id",
+    "verifyapikey.VA-VerifyApiKey.client_secret"
+  ]
+}
