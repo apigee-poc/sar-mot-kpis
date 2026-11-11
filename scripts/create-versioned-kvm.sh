@@ -31,16 +31,8 @@ if [[ -z "${TOKEN}" ]]; then
 fi
 
 API="https://apigee.googleapis.com/v1/organizations/${ORG}/environments/${ENV}/keyvaluemaps"
-# First Python that actually runs: python3, then python, else gcloud's bundled one (as before).
-# A bare "command -v python3" can pick the Windows Store stub, which only prints
-# "Python was not found", so each candidate is probed with -c 'pass'.
-PY=""
-for p in python3 python; do
-  if "${p}" -c 'pass' >/dev/null 2>&1; then PY="${p}"; break; fi
-done
-if [[ -z "${PY}" ]]; then
-  PY="$(gcloud info --format='value(basic.python_location)')"
-fi
+# PY = first working Python 3: python3, python, else gcloud's bundled one (scripts/lib/python.sh).
+source "$(dirname "${BASH_SOURCE[0]}")/lib/python.sh"
 
 if [ ! -d "${KVM_DIR}" ]; then
   echo "No KVM definitions at ${KVM_DIR} — skipping."

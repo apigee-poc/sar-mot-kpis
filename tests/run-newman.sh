@@ -189,8 +189,34 @@ COLLECTION="tests/sar-mot-kpis.postman_collection.json"
 ENV_FILE="tests/environments/${ENV_NAME}.postman_environment.json"
 REPORT="reports/newman-${ENV_NAME}${SCENARIO:+-${SCENARIO}}.xml"
 
+# With gcloud (workstation): gcloud secrets versions access. Without gcloud (Cloud Build node
+# image, P7): the Secret Manager REST API with the build token in /workspace/.token, decoded by
+# node. Either way the value only reaches the caller's variable; it is never echoed or written.
 read_secret() {
-  gcloud secrets versions access latest --secret="$1" --project="$PROJECT" --quiet
+  if command -v gcloud >/dev/null 2>&1; then
+    gcloud secrets versions access latest --secret="$1" --project="$PROJECT" --quiet
+    return
+  fi
+  local token
+  token="$(tr -d '\r\n[:space:]' < /workspace/.token 2>/dev/null || true)"
+  if [ -z "$token" ]; then
+    echo "ERROR: no gcloud and no /workspace/.token: cannot read secret $1" >&2
+    return 1
+  fi
+  curl -sS --fail -H "Authorization: Bearer $token" \
+    "https://secretmanager.googleapis.com/v1/projects/$PROJECT/secrets/$1/versions/latest:access" \
+    | node -e '
+let s = "";
+process.stdin.on("data", (c) => { s += c; });
+process.stdin.on("end", () => {
+  let d;
+  try { d = JSON.parse(s).payload.data; } catch (e) { d = undefined; }
+  if (typeof d !== "string" || d === "") {
+    process.stderr.write("ERROR: unexpected Secret Manager response\n");
+    process.exit(1);
+  }
+  process.stdout.write(Buffer.from(d, "base64").toString("utf8"));
+});'
 }
 
 # Plain assignments (not `local x=$(...)`) so a failing gcloud stops the script (set -e).

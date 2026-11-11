@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Creates required service accounts and IAM bindings for SAR MOT KPIs non-prod.
 # Usage: 02-service-accounts-iam.sh [env_file]
+# Exit: 0 all bindings applied; 3 everything else applied but the Application Integration service
+# agent was missing (Quick setup not done, D28) or its connectors.invoker grant failed; other
+# non-zero: a gcloud call failed (set -e).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -68,14 +71,25 @@ gcloud iam service-accounts add-iam-policy-binding "${PROXY_RUNTIME_EMAIL}" \
 # 4b. Grant the Application Integration service agent roles/connectors.invoker on the project.
 # Without it, publishing an integration with a Connectors task fails with
 # "Permission 'connectors.connections.get' denied" (D28). The agent exists only after
-# Application Integration has been provisioned in the project/region (Console Quick setup).
+# Application Integration has been provisioned in the project/region (Console Quick setup, D28).
+# Pre-check (M-5): the agent must already appear as a member in the project IAM policy (it holds
+# roles/integrations.serviceAgent once provisioned; VERIFY on a freshly provisioned project).
+# A missing agent or a failed grant does NOT stop the later grants; the script exits 3 at the end.
 INTEGRATIONS_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-integrations.iam.gserviceaccount.com"
-echo "Granting roles/connectors.invoker to Application Integration Service Agent ${INTEGRATIONS_SERVICE_AGENT}..."
-gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-  --member="serviceAccount:${INTEGRATIONS_SERVICE_AGENT}" \
-  --role="roles/connectors.invoker" \
-  --condition=None \
-  --quiet >/dev/null
+INCOMPLETE=""
+AGENT_IN_POLICY="$(gcloud projects get-iam-policy "${PROJECT_ID}"   --flatten="bindings[].members"   --filter="bindings.members:serviceAccount:${INTEGRATIONS_SERVICE_AGENT}"   --format="value(bindings.role)" 2>/dev/null || true)"
+if [[ -z "${AGENT_IN_POLICY}" ]]; then
+  echo "WARNING: Application Integration service agent ${INTEGRATIONS_SERVICE_AGENT} not found in the" >&2
+  echo "         IAM policy of ${PROJECT_ID}. Provision Application Integration in ${REGION:-us-central1}" >&2
+  echo "         with the Console Quick setup (D28), then re-run this script. Skipping roles/connectors.invoker." >&2
+  INCOMPLETE="${INCOMPLETE} connectors.invoker(service agent missing)"
+else
+  echo "Granting roles/connectors.invoker to Application Integration Service Agent ${INTEGRATIONS_SERVICE_AGENT}..."
+  if ! gcloud projects add-iam-policy-binding "${PROJECT_ID}"     --member="serviceAccount:${INTEGRATIONS_SERVICE_AGENT}"     --role="roles/connectors.invoker"     --condition=None     --quiet >/dev/null; then
+    echo "WARNING: granting roles/connectors.invoker to ${INTEGRATIONS_SERVICE_AGENT} failed; continuing." >&2
+    INCOMPLETE="${INCOMPLETE} connectors.invoker(grant failed)"
+  fi
+fi
 
 # 5. Grant cb-deploy-nonprod roles in apigee-nonprod-511322
 echo "Granting deployment roles to ${CB_DEPLOY_SA}..."
@@ -136,6 +150,29 @@ if gcloud storage buckets describe "gs://${SEED_BUCKET}" --project="${PROJECT_ID
     --quiet >/dev/null
 else
   echo "Seed bucket 'gs://${SEED_BUCKET}' does not exist yet; bucket-level binding will be applied in Phase P2."
+fi
+
+# 8. Let the build SA read the four Newman test-app secrets (P7: tests/run-newman.sh in Cloud
+# Build). Secret-level bindings only, each applied only if the secret exists (infra/05 creates them).
+for NEWMAN_SECRET in sar-mot-poc-app-api-key sar-mot-poc-app-api-secret                      sar-mot-poc-other-app-api-key sar-mot-poc-other-app-api-secret; do
+  if gcloud secrets describe "${NEWMAN_SECRET}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    echo "Granting roles/secretmanager.secretAccessor on secret ${NEWMAN_SECRET} to ${CB_DEPLOY_SA}..."
+    gcloud secrets add-iam-policy-binding "${NEWMAN_SECRET}"       --member="serviceAccount:${CB_DEPLOY_SA}"       --role="roles/secretmanager.secretAccessor"       --project="${PROJECT_ID}"       --quiet >/dev/null
+  else
+    echo "Secret '${NEWMAN_SECRET}' does not exist yet (created by infra/05); re-run this script after infra/05."
+  fi
+done
+
+# db/load.sh needs nothing more: cb-deploy has roles/cloudsql.admin (sql import) and
+# roles/storage.objectAdmin on the seed bucket (step 7, D17); the Cloud SQL instance's own service
+# account gets roles/storage.objectViewer on the bucket in infra/03.
+
+if [[ -n "${INCOMPLETE}" ]]; then
+  echo "============================================================" >&2
+  echo "INCOMPLETE: all other bindings were applied, but not:${INCOMPLETE}" >&2
+  echo "Fix the cause above (D28) and re-run this script (it is idempotent)." >&2
+  echo "============================================================" >&2
+  exit 3
 fi
 
 echo "============================================================"

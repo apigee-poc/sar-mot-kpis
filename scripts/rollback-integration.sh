@@ -12,16 +12,8 @@
 set -euo pipefail
 
 PROJECT="$1"; REGION="$2"; INTEGRATION="$3"; PREV_VER="${4:-}"; FAILED_VER="${5:-}"
-# First Python that actually runs: python3, then python, else gcloud's bundled one (as before).
-# A bare "command -v python3" can pick the Windows Store stub, which only prints
-# "Python was not found", so each candidate is probed with -c 'pass'.
-PY=""
-for p in python3 python; do
-  if "${p}" -c 'pass' >/dev/null 2>&1; then PY="${p}"; break; fi
-done
-if [[ -z "${PY}" ]]; then
-  PY="$(gcloud info --format='value(basic.python_location)')"
-fi
+# PY = first working Python 3: python3, python, else gcloud's bundled one (scripts/lib/python.sh).
+source "$(dirname "${BASH_SOURCE[0]}")/lib/python.sh"
 TOKEN="$(gcloud auth print-access-token 2>/dev/null || ([ -f /workspace/.token ] && cat /workspace/.token) || true)"
 BASE="https://integrations.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/integrations/${INTEGRATION}/versions"
 

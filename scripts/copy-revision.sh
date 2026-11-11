@@ -5,8 +5,8 @@
 # Writes: bundle.zip, bundle_description.txt, imported_revision.txt
 set -euo pipefail
 
-# JSON parsing: system python3 if the image has it, otherwise the Python bundled with gcloud
-PY="$(command -v python3 || gcloud info --format='value(basic.python_location)')"
+# PY = first working Python 3: python3, python, else gcloud's bundled one (scripts/lib/python.sh).
+source "$(dirname "${BASH_SOURCE[0]}")/lib/python.sh"
 
 SRC_ORG="$1"; REV="$2"; DST_ORG="$3"; PROXY="$4"
 if [[ -z "${REV}" ]]; then
