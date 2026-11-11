@@ -13,6 +13,7 @@
     "request.header.X-API-Secret",
     "request.header.x-operator-id",
     "request.header.X-Operator-Id",
+    "verifyapikey.VA-VerifyApiKey.client_id",
     "verifyapikey.VA-VerifyApiKey.client_secret"
   ]
 }

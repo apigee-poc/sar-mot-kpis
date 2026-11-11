@@ -18,6 +18,8 @@
 # Idempotent: existing products, developer and apps are left as they are (409 / 200 on GET).
 # A secret VERSION is added only when the secret has no enabled version yet.
 set -euo pipefail
+# Never trace: shell variables below hold API credentials (guards against `bash -x`).
+set +x
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${1:-${SCRIPT_DIR}/env/nonprod.env}"
@@ -69,8 +71,15 @@ echo "============================================================"
 # by this function).
 HTTP_CODE=""
 BODY=""
+# SAFE_BODY=1 only for responses that cannot carry credentials (everything except .../apps...).
+# fail_call prints BODY only when SAFE_BODY=1, so an app/credential response is never printed.
+SAFE_BODY=0
 api_call() {
   local method="$1" url="$2" data="${3:-}" out
+  case "${url}" in
+    */apps|*/apps/*|*/apps?*) SAFE_BODY=0 ;;
+    *) SAFE_BODY=1 ;;
+  esac
   if [[ -n "${data}" ]]; then
     out="$(curl -sS -w $'\n%{http_code}' -X "${method}" \
       -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" \
@@ -83,11 +92,11 @@ api_call() {
   BODY="${out%$'\n'*}"
 }
 
-# fail_call <what>: prints the HTTP code and, only for error responses of calls that cannot carry
-# credentials, the error body.
+# fail_call <what> [show-body]: prints the HTTP code and, if asked AND the last call was not an
+# apps call (SAFE_BODY=1), the error body.
 fail_call() {
   echo "ERROR: ${1} failed (HTTP ${HTTP_CODE})." >&2
-  if [[ "${2:-}" == "show-body" ]]; then
+  if [[ "${2:-}" == "show-body" && "${SAFE_BODY}" == "1" ]]; then
     printf '%s\n' "${BODY}" >&2
   fi
   exit 1
@@ -111,7 +120,7 @@ print(json.dumps({
     "proxies": [proxy],
     "apiResources": [path],
     "attributes": [{"name": "access", "value": "internal"}],
-}))' "${name}" "${display}" "${path}" "${PROXY_NAME}")"
+}))' "${name}" "${display}" "${path}" "${PROXY_NAME}" | tr -d '\r')"
   api_call GET "${API}/apiproducts/${name}"
   if [[ "${HTTP_CODE}" == "200" ]]; then
     echo "API product ${name} already exists."
@@ -140,7 +149,7 @@ if [[ "${HTTP_CODE}" == "200" ]]; then
 elif [[ "${HTTP_CODE}" == "404" ]]; then
   DEV_BODY="$("${PY}" -c '
 import json, sys
-print(json.dumps({"email": sys.argv[1], "firstName": "MOT", "lastName": "POC", "userName": "mot-poc"}))' "${DEVELOPER_EMAIL}")"
+print(json.dumps({"email": sys.argv[1], "firstName": "MOT", "lastName": "POC", "userName": "mot-poc"}))' "${DEVELOPER_EMAIL}" | tr -d '\r')"
   api_call POST "${API}/developers" "${DEV_BODY}"
   if [[ "${HTTP_CODE}" =~ ^20[01]$ ]]; then
     echo "Developer ${DEVELOPER_EMAIL} created."
@@ -166,9 +175,17 @@ ensure_secret() {
     --quiet >/dev/null
 }
 
+# Returns 0 if the secret has an enabled version, 1 if not. A gcloud failure (permissions,
+# transient error) is NOT read as "no version": the script stops, so it never adds a duplicate.
 secret_has_version() {
-  gcloud secrets versions list "$1" --project="${PROJECT_ID}" \
-    --filter="state:ENABLED" --format='value(name)' --limit=1 2>/dev/null | grep -q '^[0-9]'
+  local out
+  if ! out="$(gcloud secrets versions list "$1" --project="${PROJECT_ID}" \
+      --filter="state:ENABLED" --format='value(name.basename())' --limit=1)"; then
+    echo "ERROR: could not list the versions of secret $1." >&2
+    exit 1
+  fi
+  out="$(printf '%s' "${out}" | tr -d '\r')"
+  [[ "${out}" =~ ^[0-9]+$ ]]
 }
 
 # store_credential <secret-name> <field: consumerKey|consumerSecret>
@@ -186,7 +203,7 @@ store_credential() {
 import json, sys
 creds = json.load(sys.stdin).get("credentials", [])
 approved = [c for c in creds if c.get("status", "approved") == "approved"] or creds
-print(len(approved[0].get(sys.argv[1], "")) if approved else 0)' "${field}")"
+print(len(approved[0].get(sys.argv[1], "")) if approved else 0)' "${field}" | tr -d '\r')"
   if [[ "${value_len}" == "0" ]]; then
     echo "  WARNING: the Apigee API did not return ${field}; ${secret} NOT stored." >&2
     echo "           (rotate it in the console / re-create the app, then store it manually)." >&2
@@ -207,7 +224,7 @@ create_app() {
   local app="$1" product="$2" key_secret="$3" secret_secret="$4" app_body
   app_body="$("${PY}" -c '
 import json, sys
-print(json.dumps({"name": sys.argv[1], "apiProducts": [sys.argv[2]]}))' "${app}" "${product}")"
+print(json.dumps({"name": sys.argv[1], "apiProducts": [sys.argv[2]]}))' "${app}" "${product}" | tr -d '\r')"
   api_call GET "${API}/developers/${DEVELOPER_EMAIL}/apps/${app}"
   if [[ "${HTTP_CODE}" == "200" ]]; then
     echo "Developer app ${app} already exists."

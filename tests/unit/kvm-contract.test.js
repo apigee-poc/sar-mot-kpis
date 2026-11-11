@@ -89,6 +89,26 @@ function configParameters() {
   return out;
 }
 
+// Name of the VerifyAPIKey policy, taken from the bundle (the policy file whose root element is
+// VerifyAPIKey), so a rename of the policy cannot silently break the debug-mask expectations.
+function verifyApiKeyPolicyName() {
+  const dir = path.join(PROXY_DIR, 'policies');
+  const names = fs.readdirSync(dir).filter((file) => {
+    const xml = read(path.join(dir, file)).replace(/<\?xml[^>]*\?>/, '').replace(/<!--[\s\S]*?-->/g, '');
+    return /^\s*<VerifyAPIKey[\s>]/.test(xml);
+  }).map((file) => file.replace(/\.xml$/, ''));
+  expect(names, 'exactly one VerifyAPIKey policy').to.have.length(1);
+  return names[0];
+}
+
+// mapIdentifier of a KVM policy minus the pipeline-stamped version suffix.
+function mapBaseName(policy) {
+  const xml = read(path.join(PROXY_DIR, 'policies', `${policy}.xml`));
+  const m = /mapIdentifier="([^"]+)-__KVM_VERSION__"/.exec(xml);
+  expect(m, `${policy} mapIdentifier`).to.not.equal(null);
+  return m[1];
+}
+
 // Every config.<name> variable used anywhere in the proxy (except the KVM policy that sets them).
 function configVariablesUsed() {
   const used = [];
@@ -124,6 +144,11 @@ describe('environment KVM files and proxy contract', () => {
           });
           expect(unique(entryNames(def))).to.have.length(def.entries.length);
         });
+      });
+
+      it('KVM file names equal the policy mapIdentifier base names', () => {
+        expect(mapBaseName('KVM-GetConfig')).to.equal(readJson(kvmFile(env, 'sar-mot-kpis-config')).name);
+        expect(mapBaseName('KVM-GetErrorMessage')).to.equal(readJson(kvmFile(env, 'sar-mot-kpis-errors')).name);
       });
 
       it('error keys equal the lookup keys of the catalog and cover every key the proxy uses', () => {
@@ -201,25 +226,27 @@ describe('environment KVM files and proxy contract', () => {
         expect(v.commit).to.equal('__KVM_VERSION__');
       });
 
-      it('debugmask.json masks the credentials headers and the client secret', () => {
+      it('debugmask.json masks the credentials headers, the client id and the client secret', () => {
         const mask = readJson(path.join(ENV_DIR, env, 'debugmask.json'));
         ['namespaces', 'faultJSONPaths', 'faultXPaths', 'requestJSONPaths', 'requestXPaths',
           'responseJSONPaths', 'responseXPaths', 'variables'].forEach((k) => {
           expect(mask, k).to.have.property(k);
         });
+        const va = verifyApiKeyPolicyName();
         const lower = mask.variables.map((x) => x.toLowerCase());
         [
           'request.header.x-api-key',
           'request.header.x-api-secret',
           'request.header.x-operator-id',
-          'verifyapikey.va-verifyapikey.client_secret'
+          `verifyapikey.${va.toLowerCase()}.client_id`,
+          `verifyapikey.${va.toLowerCase()}.client_secret`
         ].forEach((name) => {
           expect(lower, name).to.include(name);
         });
         // Both spellings are listed because the docs do not say whether the match is case-sensitive.
         expect(mask.variables).to.include.members([
           'request.header.X-API-Key', 'request.header.X-API-Secret', 'request.header.X-Operator-Id',
-          'verifyapikey.VA-VerifyApiKey.client_secret'
+          `verifyapikey.${va}.client_id`, `verifyapikey.${va}.client_secret`
         ]);
       });
     });

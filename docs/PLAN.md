@@ -268,7 +268,8 @@ doesn't need the integration; dev passes the full Newman suite.
 ## P6 — Tests
 
 1. `tests/unit/` (mocha): every branch of `JS-ValidateRequestTimestamp`.
-2. `tests/sar-mot-kpis.postman_collection.json`. At least one request per catalog row, plus:
+2. `tests/sar-mot-kpis.postman_collection.json`. At least one request per catalog row (404 tests use
+   `/kpis/<unknown>`: an unknown path outside `/kpis/**` gives 403, see D32), plus:
    - 200 full year 2025 (3 items, values equal the OAS example)
    - 200 quarter 3
    - 200 year 2026 → `data: []`
@@ -310,7 +311,9 @@ All in Cloud Build, project `ci-cd-511313`, same triggers and service accounts a
      - scripted post-apply assertion on the ACTIVE version: task 2 `connectionName` ends in
        `sar-kpi-db-<env>` and `userLabel` == SHORT_SHA; fail the build otherwise
      - after a rollback, re-record the version id: the restored version gets a **new** id (D29)
-  6. record the dev proxy revision → create versioned KVMs → deploy proxy with runtime SA →
+  6. deploy `debugmask.json` to the environment (`organizations/<org>/environments/<env>/debugmask`;
+     **nothing does this yet**, so the AGENTS.md rule 4 masking exists only on paper until this step
+     is added), then record the dev proxy revision → create versioned KVMs → deploy proxy with runtime SA →
      wait → Newman dev → on failure roll back **proxy, then integration**
   7. repeat steps 3–6 for staging, promoting the **same proxy revision** as in
      `cicd-workspace`
