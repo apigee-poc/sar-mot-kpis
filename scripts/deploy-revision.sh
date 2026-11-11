@@ -13,7 +13,7 @@ fi
 SA="${5:-sa-kpi-proxy-runtime@${ORG}.iam.gserviceaccount.com}"
 TOKEN="$(gcloud auth print-access-token 2>/dev/null || ([ -f /workspace/.token ] && cat /workspace/.token) || true)"
 echo "Deploying ${PROXY} revision ${REV} to ${ENV} in ${ORG} (serviceAccount=${SA})"
-curl -sS --fail-with-body -X POST -H "Authorization: Bearer ${TOKEN}" \
+curl -sS --fail-with-body -X POST -H "Authorization: Bearer ${TOKEN}" -H "Content-Length: 0" \
   "https://apigee.googleapis.com/v1/organizations/${ORG}/environments/${ENV}/apis/${PROXY}/revisions/${REV}/deployments?override=true&serviceAccount=${SA}" \
   > /dev/null
 echo "Deployment requested"
