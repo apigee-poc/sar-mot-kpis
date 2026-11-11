@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-SetSystemError">
+  <DisplayName>AM-SetSystemError</DisplayName>
+  <!-- ERROR-CATALOG row 16: the lookup key has no entry in the error KVM (unmapped fault). -->
+  <AssignVariable>
+    <Name>custom.errorLookupKey</Name>
+    <Value>ERR-SYS-500</Value>
+  </AssignVariable>
+  <AssignVariable>
+    <Name>custom.statusOverride</Name>
+    <Value>500</Value>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

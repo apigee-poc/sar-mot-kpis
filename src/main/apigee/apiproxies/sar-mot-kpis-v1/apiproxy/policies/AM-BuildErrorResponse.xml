@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-BuildErrorResponse">
+  <DisplayName>AM-BuildErrorResponse</DisplayName>
+  <!-- 1. HTTP status: override (FaultRules) > status of the fault > 500 -->
+  <AssignVariable>
+    <Name>custom.finalStatusCode</Name>
+    <Template>{firstnonnull(custom.statusOverride,error.status.code,'500')}</Template>
+  </AssignVariable>
+  <!-- 2. Message from the error KVM; the ERR-SYS-500 text if the KVM returned nothing -->
+  <AssignVariable>
+    <Name>custom.finalErrorMessage</Name>
+    <Template>{firstnonnull(custom.errorMessage,'An unexpected error occurred. Quote the traceId when contacting support.')}</Template>
+  </AssignVariable>
+  <!-- error.code is the integer HTTP status, unquoted (D5) -->
+  <Set>
+    <Payload contentType="application/json">{
+  "header": {
+    "timestamp": "{custom.timestamp}",
+    "traceId": "{escapeJSON(custom.traceId)}",
+    "isSuccess": false
+  },
+  "error": {
+    "code": {custom.finalStatusCode},
+    "message": "{escapeJSON(custom.finalErrorMessage)}"
+  }
+}</Payload>
+    <StatusCode>{custom.finalStatusCode}</StatusCode>
+  </Set>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

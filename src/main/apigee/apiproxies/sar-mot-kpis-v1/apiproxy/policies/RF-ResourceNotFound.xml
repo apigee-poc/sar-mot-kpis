@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RaiseFault continueOnError="false" enabled="true" name="RF-ResourceNotFound">
+  <DisplayName>RF-ResourceNotFound</DisplayName>
+  <!-- ERROR-CATALOG row 10: unknown path (or a kpiCode that is not in the config allowlist).
+       No payload here: the DefaultFaultRule builds the error envelope. -->
+  <FaultResponse>
+    <AssignVariable>
+      <Name>custom.errorCode</Name>
+      <Value>ERR-404-RESOURCE</Value>
+    </AssignVariable>
+    <Set>
+      <StatusCode>404</StatusCode>
+      <ReasonPhrase>Not Found</ReasonPhrase>
+    </Set>
+  </FaultResponse>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</RaiseFault>

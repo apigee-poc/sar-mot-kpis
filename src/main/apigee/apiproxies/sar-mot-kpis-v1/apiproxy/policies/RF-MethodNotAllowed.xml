@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RaiseFault continueOnError="false" enabled="true" name="RF-MethodNotAllowed">
+  <DisplayName>RF-MethodNotAllowed</DisplayName>
+  <!-- ERROR-CATALOG row 11: known path, verb other than GET.
+       No payload here: the DefaultFaultRule builds the error envelope. -->
+  <FaultResponse>
+    <AssignVariable>
+      <Name>custom.errorCode</Name>
+      <Value>ERR-405-METHOD</Value>
+    </AssignVariable>
+    <Set>
+      <Headers>
+        <Header name="Allow">GET</Header>
+      </Headers>
+      <StatusCode>405</StatusCode>
+      <ReasonPhrase>Method Not Allowed</ReasonPhrase>
+    </Set>
+  </FaultResponse>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</RaiseFault>

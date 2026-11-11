@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Javascript continueOnError="false" enabled="true" timeLimit="500" name="JS-ValidateIntegrationOutput">
+  <DisplayName>JS-ValidateIntegrationOutput</DisplayName>
+  <!-- Parses response.content, validates outputParameters.data.records and sets
+       custom.outputValid (true/false) and kpi.recordsJson (JSON array text). -->
+  <ResourceURL>jsc://validateIntegrationOutput.js</ResourceURL>
+</Javascript>

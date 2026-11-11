@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<SpikeArrest continueOnError="false" enabled="true" name="SA-SpikeArrest">
+  <DisplayName>SA-SpikeArrest</DisplayName>
+  <!-- Per app; the rate (e.g. 30pm) comes from the config KVM (D14). 30pm is the fallback. -->
+  <Identifier ref="verifyapikey.VA-VerifyApiKey.client_id"/>
+  <Rate ref="config.spikeArrestRate">30pm</Rate>
+  <UseEffectiveCount>true</UseEffectiveCount>
+</SpikeArrest>

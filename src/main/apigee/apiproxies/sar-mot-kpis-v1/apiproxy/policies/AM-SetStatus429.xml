@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-SetStatus429">
+  <DisplayName>AM-SetStatus429</DisplayName>
+  <!-- ERROR-CATALOG rows 6-7: SpikeArrestViolation and QuotaViolation are always 429. -->
+  <AssignVariable>
+    <Name>custom.statusOverride</Name>
+    <Value>429</Value>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

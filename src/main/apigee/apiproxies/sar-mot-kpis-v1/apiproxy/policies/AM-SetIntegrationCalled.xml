@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-SetIntegrationCalled">
+  <DisplayName>AM-SetIntegrationCalled</DisplayName>
+  <!-- Marks that the request reached the integration call, so the ProxyEndpoint
+       FaultRules can map integration faults to ERR-500-INTEGRATION / ERR-504-TIMEOUT. -->
+  <AssignVariable>
+    <Name>custom.integrationCalled</Name>
+    <Value>true</Value>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

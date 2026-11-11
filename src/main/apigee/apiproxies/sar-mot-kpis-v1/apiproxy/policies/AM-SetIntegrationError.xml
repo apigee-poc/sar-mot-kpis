@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-SetIntegrationError">
+  <DisplayName>AM-SetIntegrationError</DisplayName>
+  <!-- ERROR-CATALOG row 13: any other fault raised by the integration call
+       (e.g. integrations.execute returning 400, D30) becomes a 500. -->
+  <AssignVariable>
+    <Name>custom.errorCode</Name>
+    <Value>ERR-500-INTEGRATION</Value>
+  </AssignVariable>
+  <AssignVariable>
+    <Name>custom.statusOverride</Name>
+    <Value>500</Value>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

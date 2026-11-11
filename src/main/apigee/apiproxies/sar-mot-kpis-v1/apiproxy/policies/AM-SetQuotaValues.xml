@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-SetQuotaValues">
+  <DisplayName>AM-SetQuotaValues</DisplayName>
+  <!-- Quota settings: the API product quota wins when it is set, otherwise the config KVM (D14). -->
+  <AssignVariable>
+    <Name>custom.quotaLimit</Name>
+    <Template>{firstnonnull(verifyapikey.VA-VerifyApiKey.apiproduct.developer.quota.limit,config.quotaLimit)}</Template>
+  </AssignVariable>
+  <AssignVariable>
+    <Name>custom.quotaInterval</Name>
+    <Template>{firstnonnull(verifyapikey.VA-VerifyApiKey.apiproduct.developer.quota.interval,config.quotaInterval)}</Template>
+  </AssignVariable>
+  <AssignVariable>
+    <Name>custom.quotaTimeUnit</Name>
+    <Template>{firstnonnull(verifyapikey.VA-VerifyApiKey.apiproduct.developer.quota.timeunit,config.quotaTimeUnit)}</Template>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

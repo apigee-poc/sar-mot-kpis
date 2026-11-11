@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-SetClientTraceId">
+  <DisplayName>AM-SetClientTraceId</DisplayName>
+  <!-- Runs only after RF-InvalidRequestId, so the header is a valid UUID here. -->
+  <AssignVariable>
+    <Name>custom.traceId</Name>
+    <Ref>request.header.X-Request-Id</Ref>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

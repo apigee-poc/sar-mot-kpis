@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RaiseFault continueOnError="false" enabled="true" name="RF-BadGateway">
+  <DisplayName>RF-BadGateway</DisplayName>
+  <!-- ERROR-CATALOG row 14: integration output missing, not an array, more than 4 items, or malformed records.
+       No payload here: the DefaultFaultRule builds the error envelope. -->
+  <FaultResponse>
+    <AssignVariable>
+      <Name>custom.errorCode</Name>
+      <Value>ERR-502-GATEWAY</Value>
+    </AssignVariable>
+    <Set>
+      <StatusCode>502</StatusCode>
+      <ReasonPhrase>Bad Gateway</ReasonPhrase>
+    </Set>
+  </FaultResponse>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</RaiseFault>

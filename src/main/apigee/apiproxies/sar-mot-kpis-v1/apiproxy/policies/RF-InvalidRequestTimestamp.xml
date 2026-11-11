@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RaiseFault continueOnError="false" enabled="true" name="RF-InvalidRequestTimestamp">
+  <DisplayName>RF-InvalidRequestTimestamp</DisplayName>
+  <!-- ERROR-CATALOG row 8: X-Request-Timestamp missing, not ISO-8601 UTC, or outside the clock skew.
+       No payload here: the DefaultFaultRule builds the error envelope. -->
+  <FaultResponse>
+    <AssignVariable>
+      <Name>custom.errorCode</Name>
+      <Value>ERR-400-TIMESTAMP</Value>
+    </AssignVariable>
+    <Set>
+      <StatusCode>400</StatusCode>
+      <ReasonPhrase>Bad Request</ReasonPhrase>
+    </Set>
+  </FaultResponse>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</RaiseFault>

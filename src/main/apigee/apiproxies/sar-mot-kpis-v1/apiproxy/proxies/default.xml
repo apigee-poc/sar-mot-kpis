@@ -1,17 +1,194 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <ProxyEndpoint name="default">
   <Description>Default proxy endpoint for SAR MOT KPIs</Description>
+  <!--
+    Evaluation order follows docs/ERROR-CATALOG.md: the first failing check wins.
+    1. timestamp + default trace ID, config KVM   2. X-Request-Id
+    3. API key, secret, SpikeArrest, Quota        4. X-Request-Timestamp, X-Operator-Id
+    5. routing (404 / 405)                        6. year / quarter
+    7. integration call and output validation
+  -->
+  <FaultRules>
+    <!-- ERROR-CATALOG row 5: valid key, product does not cover this resource -> 403 -->
+    <FaultRule name="invalid-key-for-resource">
+      <Step>
+        <Name>AM-SetStatus403</Name>
+      </Step>
+      <Condition>fault.name = "InvalidApiKeyForGivenResource"</Condition>
+    </FaultRule>
+    <!-- ERROR-CATALOG rows 6-7: always 429 -->
+    <FaultRule name="rate-limit">
+      <Step>
+        <Name>AM-SetStatus429</Name>
+      </Step>
+      <Condition>(fault.name = "SpikeArrestViolation") or (fault.name = "QuotaViolation")</Condition>
+    </FaultRule>
+    <!-- Faults from the integration call. Faults raised by our own RF-* policies
+         (e.g. RF-BadGateway in the response flow) set custom.errorCode and are excluded.
+         ERROR-CATALOG row 15: timeout / unavailable -> 504; row 13: anything else -> 500. -->
+    <FaultRule name="integration-fault">
+      <Step>
+        <Name>AM-SetTimeoutError</Name>
+        <Condition>(fault.name = "GatewayTimeout") or (fault.name = "ServiceUnavailable")</Condition>
+      </Step>
+      <Step>
+        <Name>AM-SetIntegrationError</Name>
+        <Condition>(fault.name != "GatewayTimeout") and (fault.name != "ServiceUnavailable")</Condition>
+      </Step>
+      <Condition>(custom.integrationCalled = "true") and (custom.errorCode = null)</Condition>
+    </FaultRule>
+  </FaultRules>
+  <DefaultFaultRule name="default-fault">
+    <Step>
+      <Name>AM-SetLookupKey</Name>
+    </Step>
+    <Step>
+      <Name>KVM-GetErrorMessage</Name>
+    </Step>
+    <Step>
+      <Name>AM-SetSystemError</Name>
+      <Condition>custom.errorMessage = null</Condition>
+    </Step>
+    <Step>
+      <Name>AM-BuildErrorResponse</Name>
+    </Step>
+    <Step>
+      <Name>AM-SetResponseRequestIdHeader</Name>
+    </Step>
+    <AlwaysEnforce>true</AlwaysEnforce>
+  </DefaultFaultRule>
   <PreFlow name="PreFlow">
-    <Request/>
+    <Request>
+      <Step>
+        <Name>AM-SetTraceAndTimestamp</Name>
+      </Step>
+      <Step>
+        <Name>KVM-GetConfig</Name>
+      </Step>
+      <Step>
+        <Name>RF-InvalidRequestId</Name>
+        <Condition>request.header.X-Request-Id = null</Condition>
+      </Step>
+      <Step>
+        <Name>RF-InvalidRequestId</Name>
+        <Condition>!(request.header.X-Request-Id JavaRegex "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")</Condition>
+      </Step>
+      <Step>
+        <Name>AM-SetClientTraceId</Name>
+      </Step>
+      <Step>
+        <Name>VA-VerifyApiKey</Name>
+      </Step>
+      <Step>
+        <Name>RF-InvalidSecret</Name>
+        <Condition>(request.header.X-API-Secret = null) or (request.header.X-API-Secret != verifyapikey.VA-VerifyApiKey.client_secret)</Condition>
+      </Step>
+      <Step>
+        <Name>SA-SpikeArrest</Name>
+      </Step>
+      <Step>
+        <Name>AM-SetQuotaValues</Name>
+      </Step>
+      <Step>
+        <Name>Q-ImposeQuota</Name>
+      </Step>
+      <Step>
+        <Name>JS-ValidateRequestTimestamp</Name>
+      </Step>
+      <Step>
+        <Name>RF-InvalidRequestTimestamp</Name>
+        <Condition>custom.timestampValid != true</Condition>
+      </Step>
+      <Step>
+        <Name>RF-InvalidOperatorId</Name>
+        <Condition>(request.header.X-Operator-Id = null) or !(request.header.X-Operator-Id JavaRegex "[12][0-9]{9}")</Condition>
+      </Step>
+    </Request>
     <Response/>
   </PreFlow>
-  <Flows/>
+  <Flows>
+    <Flow name="GetTotalFreight">
+      <Description>GET /kpis/total_freight</Description>
+      <Request>
+        <Step>
+          <Name>AM-SetKpiCode</Name>
+        </Step>
+        <Step>
+          <Name>JS-CheckKpiAllowed</Name>
+        </Step>
+        <Step>
+          <Name>RF-ResourceNotFound</Name>
+          <Condition>custom.kpiAllowed != true</Condition>
+        </Step>
+        <Step>
+          <Name>RF-InvalidQueryParams</Name>
+          <Condition>(request.queryparam.year = null) or !(request.queryparam.year JavaRegex "20[0-9]{2}")</Condition>
+        </Step>
+        <Step>
+          <Name>RF-InvalidQueryParams</Name>
+          <Condition>(request.queryparam.quarter != null) and !(request.queryparam.quarter JavaRegex "[1-4]")</Condition>
+        </Step>
+        <Step>
+          <Name>SIR-SetIntegrationRequest</Name>
+        </Step>
+        <Step>
+          <Name>AM-SetIntegrationCalled</Name>
+        </Step>
+      </Request>
+      <Response>
+        <Step>
+          <Name>RF-IntegrationError</Name>
+          <Condition>(response.status.code &lt; 200) or (response.status.code &gt; 299)</Condition>
+        </Step>
+        <Step>
+          <Name>EV-ExtractIntegrationOutput</Name>
+          <Condition>response.content != null</Condition>
+        </Step>
+        <Step>
+          <Name>JS-ValidateIntegrationOutput</Name>
+        </Step>
+        <Step>
+          <Name>RF-BadGateway</Name>
+          <Condition>custom.outputValid != true</Condition>
+        </Step>
+        <Step>
+          <Name>AM-BuildKpiResponse</Name>
+        </Step>
+      </Response>
+      <Condition>(proxy.pathsuffix MatchesPath "/kpis/total_freight") and (request.verb = "GET")</Condition>
+    </Flow>
+    <Flow name="MethodNotAllowed">
+      <Description>Known path, verb other than GET</Description>
+      <Request>
+        <Step>
+          <Name>RF-MethodNotAllowed</Name>
+        </Step>
+      </Request>
+      <Response/>
+      <Condition>(proxy.pathsuffix MatchesPath "/kpis/total_freight") and (request.verb != "GET")</Condition>
+    </Flow>
+    <Flow name="NotFound">
+      <Description>Catch-all: unknown path</Description>
+      <Request>
+        <Step>
+          <Name>RF-ResourceNotFound</Name>
+        </Step>
+      </Request>
+      <Response/>
+    </Flow>
+  </Flows>
   <PostFlow name="PostFlow">
     <Request/>
-    <Response/>
+    <Response>
+      <Step>
+        <Name>AM-SetResponseRequestIdHeader</Name>
+      </Step>
+    </Response>
   </PostFlow>
   <HTTPProxyConnection>
     <BasePath>/mot-kpis/business-domain/v1</BasePath>
   </HTTPProxyConnection>
-  <RouteRule name="noroute"/>
+  <RouteRule name="integration">
+    <IntegrationEndpoint>default</IntegrationEndpoint>
+  </RouteRule>
 </ProxyEndpoint>

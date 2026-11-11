@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Extracts the records array of the integration output (D26) into kpi.records for
+  debug sessions and logging. The 200 body does NOT use this variable: the array is
+  parsed, validated and re-serialised by JS-ValidateIntegrationOutput (kpi.recordsJson),
+  so the response does not depend on how ExtractVariables renders a JSON array.
+-->
+<ExtractVariables continueOnError="false" enabled="true" name="EV-ExtractIntegrationOutput">
+  <DisplayName>EV-ExtractIntegrationOutput</DisplayName>
+  <Source>response</Source>
+  <VariablePrefix>kpi</VariablePrefix>
+  <JSONPayload>
+    <Variable name="records">
+      <JSONPath>$.outputParameters.data.records</JSONPath>
+    </Variable>
+  </JSONPayload>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</ExtractVariables>

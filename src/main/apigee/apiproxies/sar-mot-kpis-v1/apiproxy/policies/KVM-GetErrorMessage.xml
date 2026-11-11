@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Reads the client message for custom.errorLookupKey from the versioned error KVM
+  (__KVM_VERSION__ is stamped by the pipeline). continueOnError is true: this runs in
+  the DefaultFaultRule, and a failure here must still produce an error envelope
+  (AM-SetSystemError + AM-BuildErrorResponse fall back to the ERR-SYS-500 text).
+-->
+<KeyValueMapOperations continueOnError="true" enabled="true" name="KVM-GetErrorMessage" mapIdentifier="sar-mot-kpis-errors-__KVM_VERSION__">
+  <DisplayName>KVM-GetErrorMessage</DisplayName>
+  <Scope>environment</Scope>
+  <ExpiryTimeInSecs>300</ExpiryTimeInSecs>
+  <Get assignTo="custom.errorMessage">
+    <Key>
+      <Parameter ref="custom.errorLookupKey"/>
+    </Key>
+  </Get>
+</KeyValueMapOperations>

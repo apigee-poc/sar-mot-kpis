@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Builds the request for the IntegrationEndpoint. Integration name, API trigger
+  (api_trigger/sar-kpi-get-<env>), project and region all come from the config KVM,
+  so the bundle is identical in every environment (D4, D22).
+  No <Request> element: it must be omitted when an IntegrationEndpoint runs the call.
+  quarter: the literal 0 (= all quarters) is used when the query parameter is absent.
+-->
+<SetIntegrationRequest continueOnError="false" enabled="true" name="SIR-SetIntegrationRequest">
+  <DisplayName>SIR-SetIntegrationRequest</DisplayName>
+  <ProjectId ref="config.projectId"/>
+  <IntegrationName ref="config.integrationName"/>
+  <IntegrationRegion ref="config.region"/>
+  <ApiTrigger ref="config.triggerName"/>
+  <Parameters>
+    <Parameter name="kpiCode" type="string" ref="kpi.code"/>
+    <Parameter name="year" type="integer" ref="request.queryparam.year"/>
+    <Parameter name="quarter" type="integer" ref="request.queryparam.quarter">0</Parameter>
+  </Parameters>
+</SetIntegrationRequest>

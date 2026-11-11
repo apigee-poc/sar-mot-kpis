@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Loads the per-environment configuration from a versioned KVM.
+  The pipeline replaces __KVM_VERSION__ with the short commit SHA (same mechanism as
+  cicd-workspace), so each proxy revision reads its own KVM and a proxy rollback also
+  rolls back the integration it calls (D4, D14, D22).
+  continueOnError is false: without its config the proxy must not call anything.
+-->
+<KeyValueMapOperations continueOnError="false" enabled="true" name="KVM-GetConfig" mapIdentifier="sar-mot-kpis-config-__KVM_VERSION__">
+  <DisplayName>KVM-GetConfig</DisplayName>
+  <Scope>environment</Scope>
+  <ExpiryTimeInSecs>300</ExpiryTimeInSecs>
+  <Get assignTo="config.integrationName">
+    <Key>
+      <Parameter>integrationName</Parameter>
+    </Key>
+  </Get>
+  <Get assignTo="config.triggerName">
+    <Key>
+      <Parameter>triggerName</Parameter>
+    </Key>
+  </Get>
+  <Get assignTo="config.projectId">
+    <Key>
+      <Parameter>projectId</Parameter>
+    </Key>
+  </Get>
+  <Get assignTo="config.region">
+    <Key>
+      <Parameter>region</Parameter>
+    </Key>
+  </Get>
+  <Get assignTo="config.spikeArrestRate">
+    <Key>
+      <Parameter>spikeArrestRate</Parameter>
+    </Key>
+  </Get>
+  <Get assignTo="config.quotaLimit">
+    <Key>
+      <Parameter>quotaLimit</Parameter>
+    </Key>
+  </Get>
+  <Get assignTo="config.quotaInterval">
+    <Key>
+      <Parameter>quotaInterval</Parameter>
+    </Key>
+  </Get>
+  <Get assignTo="config.quotaTimeUnit">
+    <Key>
+      <Parameter>quotaTimeUnit</Parameter>
+    </Key>
+  </Get>
+  <Get assignTo="config.maxClockSkewSeconds">
+    <Key>
+      <Parameter>maxClockSkewSeconds</Parameter>
+    </Key>
+  </Get>
+  <Get assignTo="config.allowedKpis">
+    <Key>
+      <Parameter>allowedKpis</Parameter>
+    </Key>
+  </Get>
+  <Get assignTo="config.commit">
+    <Key>
+      <Parameter>commit</Parameter>
+    </Key>
+  </Get>
+</KeyValueMapOperations>

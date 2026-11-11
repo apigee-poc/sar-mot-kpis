@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-SetResponseRequestIdHeader">
+  <DisplayName>AM-SetResponseRequestIdHeader</DisplayName>
+  <!-- Every response (success and error) echoes the trace ID (D7). -->
+  <Set>
+    <Headers>
+      <Header name="X-Request-Id">{custom.traceId}</Header>
+    </Headers>
+  </Set>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

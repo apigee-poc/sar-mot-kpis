@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-BuildKpiResponse">
+  <DisplayName>AM-BuildKpiResponse</DisplayName>
+  <!-- kpi.recordsJson is the JSON.stringify output of JS-ValidateIntegrationOutput,
+       so "data" is a real JSON array with numeric quarter, year and actual. -->
+  <Set>
+    <Payload contentType="application/json">{
+  "header": {
+    "timestamp": "{custom.timestamp}",
+    "traceId": "{escapeJSON(custom.traceId)}",
+    "isSuccess": true
+  },
+  "data": {kpi.recordsJson}
+}</Payload>
+    <StatusCode>200</StatusCode>
+    <ReasonPhrase>OK</ReasonPhrase>
+  </Set>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-SetStatus403">
+  <DisplayName>AM-SetStatus403</DisplayName>
+  <!-- ERROR-CATALOG row 5: InvalidApiKeyForGivenResource must be 403 (Apigee default is 401). -->
+  <AssignVariable>
+    <Name>custom.statusOverride</Name>
+    <Value>403</Value>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

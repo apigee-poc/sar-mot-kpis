@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Javascript continueOnError="false" enabled="true" timeLimit="200" name="JS-CheckKpiAllowed">
+  <DisplayName>JS-CheckKpiAllowed</DisplayName>
+  <!-- Sets custom.kpiAllowed (true/false): is kpi.code in the comma-separated config.allowedKpis? -->
+  <ResourceURL>jsc://checkKpiAllowed.js</ResourceURL>
+</Javascript>

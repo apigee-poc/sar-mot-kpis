@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Javascript continueOnError="false" enabled="true" timeLimit="200" name="JS-ValidateRequestTimestamp">
+  <DisplayName>JS-ValidateRequestTimestamp</DisplayName>
+  <!-- Sets custom.timestampValid (true/false); RF-InvalidRequestTimestamp conditions on it. -->
+  <ResourceURL>jsc://validateRequestTimestamp.js</ResourceURL>
+</Javascript>

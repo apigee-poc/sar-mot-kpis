@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-SetTimeoutError">
+  <DisplayName>AM-SetTimeoutError</DisplayName>
+  <!-- ERROR-CATALOG row 15: integration timeout or service unavailable. -->
+  <AssignVariable>
+    <Name>custom.errorCode</Name>
+    <Value>ERR-504-TIMEOUT</Value>
+  </AssignVariable>
+  <AssignVariable>
+    <Name>custom.statusOverride</Name>
+    <Value>504</Value>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

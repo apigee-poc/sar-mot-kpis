@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Quota continueOnError="false" enabled="true" name="Q-ImposeQuota">
+  <DisplayName>Q-ImposeQuota</DisplayName>
+  <!-- Values set by AM-SetQuotaValues: API product quota if set, else the config KVM.
+       The literals are fallbacks only. -->
+  <Identifier ref="verifyapikey.VA-VerifyApiKey.client_id"/>
+  <Allow countRef="custom.quotaLimit" count="100"/>
+  <Interval ref="custom.quotaInterval">1</Interval>
+  <TimeUnit ref="custom.quotaTimeUnit">minute</TimeUnit>
+  <Distributed>true</Distributed>
+  <Synchronous>true</Synchronous>
+</Quota>

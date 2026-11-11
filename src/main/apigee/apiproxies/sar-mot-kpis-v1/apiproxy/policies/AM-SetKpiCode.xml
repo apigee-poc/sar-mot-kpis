@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage continueOnError="false" enabled="true" name="AM-SetKpiCode">
+  <DisplayName>AM-SetKpiCode</DisplayName>
+  <!-- The only KPI-specific value in the flow; the rest of the chain uses kpi.code. -->
+  <AssignVariable>
+    <Name>kpi.code</Name>
+    <Value>total_freight</Value>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>
