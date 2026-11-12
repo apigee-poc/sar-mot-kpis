@@ -21,6 +21,52 @@ This document records the tooling, environment setup, and deployment procedures 
 - **Maven:** `3.9.9` with `io.apigee.build-tools.enterprise4g:apigee-edge-maven-plugin:2.5.2`
 - **Google Cloud SDK:** `583.0.0`
 
+## Environments and roles
+
+### Environments
+
+All resources are in `us-central1`. Names are fixed in AGENTS.md and `infra/env/*.env`.
+"Live state" is what has actually run (2026-11-12). `<SHA>` is the short commit SHA that the
+pipeline stamps.
+
+| | dev | staging | prod |
+|---|---|---|---|
+| GCP project / Apigee org | `apigee-nonprod-511322` | `apigee-nonprod-511322` | `apigee-prod-511508` |
+| Apigee env / hostname | `dev` / `35.201.86.122.nip.io` | `staging` / `staging.35.201.86.122.nip.io` | `prod` / `prod.35.201.86.122.nip.io` (routing to the prod org is VERIFY 11) |
+| Proxy / base path | `sar-mot-kpis-v1` / `/mot-kpis/business-domain/v1` | same revision as dev (promoted) | same bundle as staging (copied, D64) |
+| Config / error KVMs | `sar-mot-kpis-config-<SHA>` / `sar-mot-kpis-errors-<SHA>` | same | same (same suffix as the staging stamp) |
+| Integration / trigger | `sar-kpi-get-dev` / `api_trigger/sar-kpi-get-dev` | `sar-kpi-get-staging` / `api_trigger/sar-kpi-get-staging` | `sar-kpi-get-prod` / `api_trigger/sar-kpi-get-prod` |
+| Connection | `sar-kpi-db-dev` | `sar-kpi-db-staging` | `sar-kpi-db-prod` (created by `scripts/create-connection.sh prod`) |
+| Cloud SQL / DB | `sar-kpi-sql-nonprod` / `kpis_dev` | `sar-kpi-sql-nonprod` / `kpis_staging` | `sar-kpi-sql-prod` / `kpis_prod` |
+| Endpoint attachment | `sar-kpi-sql-nonprod-ea` (shared by dev and staging) | same | `sar-kpi-sql-prod-ea` |
+| Seed bucket | `gs://apigee-nonprod-511322-sar-kpi-seed` | same | `gs://apigee-prod-511508-sar-kpi-seed` |
+| Runtime SAs | `sa-kpi-proxy-runtime@apigee-nonprod-511322`, `sa-kpi-connector@apigee-nonprod-511322` | same | `sa-kpi-proxy-runtime@apigee-prod-511508`, `sa-kpi-connector@apigee-prod-511508` |
+| API product / apps | `sar-mot-kpis-product` (`/kpis/**`, no verb restriction), `sar-mot-other-product`; apps `mot-poc-app`, `mot-poc-other-app` (`infra/05`) | same products and apps | `sar-mot-kpis-product`; apps `mot-app` (MOT handover) and `mot-smoke-app` (pipeline smoke) (`infra/06`) |
+| Rates (config KVM) | SpikeArrest 600pm, quota 1000/min | same | 300pm, 300/min |
+| Debug mask | applied by hand (P5, D40) | **not yet**: first `cloudbuild-main.yaml` run | **not yet**: first `cloudbuild-prod.yaml` run |
+| Deployed by | `cloudbuild-main.yaml` (and `scripts/fi-*.sh` for fault injection) | `cloudbuild-main.yaml` | `cloudbuild-prod.yaml` only (AGENTS.md rule 2) |
+| Newman | full suite (`Happy paths` + `Error rows`), FI folders on demand | full suite | `Happy paths` smoke only (D62) |
+| Live state | proxy revision 7, integration and connection live; suite green (D46) | integration and connection live (P4, D30); proxy not yet run through the pipeline | **nothing created**: P8 prod run pending |
+
+### Roles
+
+The build service accounts (`cb-validate`, `cb-deploy-nonprod`, `cb-deploy-prod`) are in
+"IAM required per build service account" below. The runtime identities and the people involved:
+
+| Identity | Role(s) | Where granted | Source |
+|---|---|---|---|
+| `sa-kpi-proxy-runtime@<project>` | `roles/integrations.integrationInvoker` on the project. The proxy deploys with it (`serviceAccount`), and the IntegrationEndpoint calls the integration as this SA. | `infra/02` | D16, D17, D40 |
+| Apigee service agent `service-<NUM>@gcp-sa-apigee` | `roles/iam.serviceAccountTokenCreator` on `sa-kpi-proxy-runtime` | `infra/02` | D17 |
+| `sa-kpi-connector@<project>` | `roles/secretmanager.secretAccessor` on `sar-kpi-db-reader-password` only; it is the connection's runtime SA | `infra/02`, `infra/03` | D12, D17 |
+| Application Integration service agent `service-<NUM>@gcp-sa-integrations` | `roles/connectors.invoker` on the project. It exists only after the Console Quick setup; without it, publish fails with `connectors.connections.get` denied. | `infra/02` (exit 3 if missing) | D28, D50 |
+| Cloud SQL instance service account | `roles/storage.objectViewer` on the seed bucket (`gcloud sql import sql`) | `infra/03` | D11 |
+| DB user `kpi_reader` | `SELECT` on `kpi_records` only; password only in Secret Manager | `db/migrations/V001…`, `infra/03` | D12 |
+| 👤 Infra / release approvers | `roles/cloudbuild.builds.approver` on `ci-cd-511313`. They need no actAs. | by hand (command D for prod) | D58, D67 |
+| 👤 Trigger creator | `roles/iam.serviceAccountUser` on the `cb-*` SA it attaches. For `cb-deploy-prod` this is **temporary**: removed by command E right after the prod triggers exist. | by hand | D67 |
+| 👤 Prod admin | Runs commands A, B and F, the Quick setup in prod, and Console-only rollbacks in prod. The only human who changes prod. | by hand | D59, D66 |
+| 👤 Non-prod admin | Runs command C (read-only custom role `sarKpiPromotionReader` for `cb-deploy-prod`) and approves non-prod billable or destructive actions | by hand | D60 |
+| 👤 Credential custodian | `roles/secretmanager.secretAccessor` on `sar-mot-app-api-key` / `-secret`; hands them to MOT out of band | by hand | D63 |
+
 ## Apigee environment settings
 
 ### Debug masks (AGENTS.md rule 4)
@@ -29,9 +75,12 @@ This document records the tooling, environment setup, and deployment procedures 
 - Applied with:
   `PATCH https://apigee.googleapis.com/v1/organizations/<org>/environments/<env>/debugmask?updateMask=variables`
   with the body `{"variables": [...]}` taken from that file.
-- Dev was applied by hand this way in P5 and verified in a debug session (D40). Staging and prod
-  are not masked yet: the P7 pipeline must run exactly this call for every environment before
-  deploying the proxy.
+- Dev was applied by hand this way in P5 and verified in a debug session (D40). The call is now
+  automated: `scripts/deploy-debugmask.sh <dev|staging>` (step `debugmask-<env>` in
+  `cloudbuild-main.yaml`) and `scripts/deploy-debugmask-prod.sh` (step `debugmask-prod` in
+  `cloudbuild-prod.yaml`) run it before every proxy deploy. Staging and prod are still **unmasked**
+  until the first run of those pipelines, which is pending user action. Do not start a debug session
+  on staging before then.
 
 ### Debug sessions via REST
 
@@ -150,6 +199,71 @@ on the `cb-*` account it attaches.
 **`infra/02` exits 3** (the infra build then stops before 03–05; fix the cause and re-run, since every script is idempotent) when:
 - the Application Integration service agent is missing (Quick setup, D28; the agent needs `roles/connectors.invoker`), or
 - the IAM policy or a Newman secret cannot be read (permission/API error, reported as such, D56).
+
+## Rollback and manual intervention (dev and staging)
+
+This section covers `cloudbuild-main.yaml` and the shared rollback scripts. For prod, see
+"Rollback behaviour and manual intervention" under "Prod (P8)" below. The mechanism is the same,
+but prod manual steps are **Console only**.
+
+### What the pipeline rolls back automatically (per environment)
+
+| Failure | Step that handles it | Result |
+|---|---|---|
+| `db-load-<env>`, `token*`, `install-integrationcli`, `record-prev-int-<env>` | none: the build stops | Nothing in that environment was changed. The database is expand-only. |
+| Integration apply or post-apply assertion | `check-int-<env>` | Rolls back **only the integration**. It is skipped if the ACTIVE version is still the previous one. The proxy is untouched; exit 1. |
+| Proxy deploy/promote, `wait-<env>`, `verify-sa-<env>`, Newman `test-<env>` | `check-<env>-test` | `scripts/rollback.sh` (proxy: redeploy the previous revision, or undeploy the failed one if there was none), **then** `scripts/rollback-integration.sh`, then the restored integration id is re-read (D29); exit 1 (D54). |
+| Dev fails | as above | Staging is never touched. |
+| Staging fails | as above, on staging | Dev keeps the new commit, which passed dev. Staging returns to its previous revision and version. |
+
+### How the integration rollback works (`scripts/rollback-integration.sh`, D25, D29)
+
+1. GET the previous version and strip the output-only fields.
+2. POST its content as a **new DRAFT version** (log: `Creating a new DRAFT version from version <prev>...`).
+3. Publish that draft (log: `Publishing restored version <id>...`).
+4. Poll every 5 s, for up to 300 s, until it is ACTIVE. The restored version gets a **new id**,
+   which the pipeline records again in `int_<env>_after_rollback.txt`.
+
+If there is no previous version, it unpublishes the failed version and checks that it is no longer
+ACTIVE. Nothing is ever deleted (AGENTS.md rule 3).
+
+**Known gaps (deferred from P7, noted here as planned):**
+
+- **Orphan DRAFT after a failed restore.** If step 2 succeeds but the publish (3) or the ACTIVE
+  wait (4) fails, the new version stays behind as a DRAFT, or as a version that is not yet ACTIVE.
+  Its id is in the `Publishing restored version <id>` log line. The script then unpublishes the
+  failed version as a safety net and exits non-zero ("manual intervention required"). So the
+  integration can be left with **no ACTIVE version**. Expect the rolled-back proxy to answer every
+  valid request with 500 (catalog row 13) until a person publishes a version. Fix:
+  1. In the Console (Application Integration → `sar-kpi-get-<env>` → versions), or with
+     `integrationcli`, check the version list.
+  2. Publish the orphan draft (it has the previous content) or a copy of the previous version.
+  3. Confirm that exactly one version is ACTIVE with the expected `userLabel`.
+  4. Run `bash tests/run-newman.sh <env> --folder "Happy paths"`.
+  Leftover drafts are harmless. Delete them only by hand, with approval.
+- **Polling noise.** If the version read fails during the ACTIVE wait, the poll loop prints the
+  API error every 5 s. Only the final `did not reach ACTIVE within 300s` line means failure.
+- A missing `kpiCode` would become the literal `"undefined"` in `JS-BuildConnectorInput`. The proxy
+  always sets it (`AM-SetKpiCode`), so this cannot happen through the API.
+
+### Cases that need a person
+
+In non-prod, a person may run the scripts from a workstation with the values from the build log.
+Every deploy, undeploy or unpublish is an approval step (AGENTS.md rule 3). The recorded values are
+in the logs of `record-prev-int-<env>` / `record-prev-<env>` (`Currently active revision in
+<env>: …`), in `apply-int-<env>` / `assert-int-<env>`, and in the rollback messages. `summary` runs
+only on success.
+
+| Situation | Log signature | What is live | What to do |
+|---|---|---|---|
+| Proxy rollback failed | `Proxy rollback FAILED: manual intervention required.` | The failed revision, or nothing | `bash scripts/rollback.sh apigee-nonprod-511322 <env> sar-mot-kpis-v1 <prev_revision> <failed_revision>`, or redeploy the previous revision with `scripts/deploy-revision.sh … <rev>` (it passes the runtime SA) |
+| Integration rollback failed | `Integration rollback FAILED: manual intervention required.` | Possibly no ACTIVE version (orphan DRAFT above) | Fix as for the orphan DRAFT, or re-run `bash scripts/rollback-integration.sh apigee-nonprod-511322 us-central1 sar-kpi-get-<env> <prev_version> <failed_version>` |
+| Hard failure after the integration publish and before the proxy deploy: `token-proxy-<env>`, `debugmask-<env>`, `record-prev-<env>`, `create-kvm-<env>` (D54(b)) | the step fails and the build stops | The **new** integration with the **old** proxy; this pair is not guaranteed to be compatible | `bash scripts/rollback-integration.sh apigee-nonprod-511322 us-central1 sar-kpi-get-<env> <prev_int> <new_int>` |
+| Build TIMEOUT, CANCELLED, or a Cloud Build failure after the publish | build status, not a script message | The new integration, and maybe the new proxy revision, with no test verdict | Both rollbacks by hand, proxy first, then the integration |
+| Two main builds at once (D58) | two overlapping `sar-mot-kpis-main` builds | Whichever deploy or rollback ran last | Wait for both builds to finish, then re-run `sar-mot-kpis-main` on the latest `main`. Merge one PR at a time. |
+| `scripts/fi-restore.sh` failed after fault injection (D46) | the `fi-restore.sh` recovery hint | A scratch revision with a broken config on dev | Re-run `bash scripts/fi-restore.sh`. If it refuses because the state is stale, redeploy the baseline revision from `.fi-state/` with `scripts/deploy-revision.sh`. Scratch revisions and KVMs stay listed in `.fi-state/history.log`. |
+| A changed connection definition | — | The old connection: the pipeline applies with `--skip-connectors=true` | Apply the connection by hand (P3 procedure) or with an infra run |
+| Bad data or schema | — | The database is **never** rolled back (rule 9) | Fix forward with a new expand-only migration or seed that still works with the previous proxy and integration |
 
 ## Prod (P8)
 
@@ -454,6 +568,11 @@ check above is the only control; it would stay as a second control afterwards.
     content as a new version (an old version cannot be re-published by id, D29). If there was no
     previous version, unpublish.
   Then fix forward: correct the cause on `main`, take it green through staging, and promote again.
+- **Orphan DRAFT (P9 note).** A failed integration restore can leave a new DRAFT, or a version
+  that is not yet ACTIVE, and `sar-kpi-get-prod` with **no ACTIVE version** after the fallback
+  unpublish ("Rollback and manual intervention (dev and staging)" above explains the mechanism). In
+  prod the fix is Console only: publish the orphan draft (it has the previous content) or a copy of
+  the previous version, then confirm that exactly one version is ACTIVE.
 - **The database is never rolled back.** `kpis_prod` keeps the expand-only schema and seed of the
   failed run, which is safe under rule 9.
 

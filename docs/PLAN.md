@@ -15,7 +15,7 @@ Agents update the status line of a phase when they start or finish it.
 | P6 | Tests (unit, Newman, integration tests) | DONE (6919831) |
 | P7 | CI/CD pipelines (PR + non-prod) | DONE (9dfd5fc) for files, scripts and static tests; live acceptance PENDING user action: git remote, Cloud Build GitHub connection and triggers (D53, DEPLOYMENT.md) |
 | P8 | Prod foundation + prod pipeline | DONE (files; prod run pending): pipelines, scripts, static tests and runbook on branch `p8-prod`; the live prod run is PENDING user action (D59–D66, DEPLOYMENT.md "Prod (P8)") |
-| P9 | Documentation + acceptance demo | TODO |
+| P9 | Documentation + acceptance demo | DONE (docs; recording and live acceptance pending user action) |
 
 ---
 
@@ -506,6 +506,27 @@ the staging-green check are there):
 rollback), `docs/ACCEPTANCE.md` (one row per catalog case with evidence). Record a demo:
 success cases, three error cases, a failing commit rolled back automatically, and a prod
 promotion.
+
+**Status: DONE (docs; recording and live acceptance pending user action).** Written offline on
+branch `p9-docs`; no cloud calls were made.
+
+- `README.md` rewritten: architecture, status, repo layout, setup order, local workflow, pipelines
+  and a doc index.
+- `docs/DEPLOYMENT.md`: new "Environments and roles" section (per-environment table and the runtime
+  and human roles). New "Rollback and manual intervention (dev and staging)" section, covering the
+  orphan DRAFT after a failed integration restore and the polling noise deferred from P7. One
+  orphan-DRAFT bullet added to the prod rollback list. The stale debug-mask note is corrected. The
+  prod runbook and both checklists are unchanged.
+- `docs/ACCEPTANCE.md`: the 4 happy paths and the 16 catalog rows with their collection requests,
+  expected status and message, and evidence. Dev: PASS (rev 7 suite; rows 6, 7, 13 and 16 by fault
+  injection). Rows 14 and 15: WAIVED (D44). Staging and prod: PENDING where the pipelines will run
+  the request, and N/A where they never do by design (FI is dev only; prod runs `Happy paths`
+  only, D62).
+- `docs/DEMO.md`: the demo script, **to be recorded by the user**.
+
+**Pending (👤):** record the demo (`docs/DEMO.md`; parts 3 and 4 need the P7 triggers and the P8
+checklist); the P7 live acceptance and the P8 prod run, then update `docs/ACCEPTANCE.md` with their
+evidence.
 
 ---
 
