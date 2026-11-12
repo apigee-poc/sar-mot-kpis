@@ -17,6 +17,16 @@ const stepText = (s) => [s.entrypoint || '', ...(s.args || []), ...(s.env || [])
 const fileText = (doc) => doc.steps.map(stepText).join('\n');
 const ids = (doc) => doc.steps.map((s) => s.id);
 
+// REQUIRE_BASH_TESTS=1 (cloudbuild-pr.yaml): a missing prerequisite fails instead of skipping (M-3).
+const STRICT = process.env.REQUIRE_BASH_TESTS === '1';
+function skipOrFail(ctx, why) {
+  if (STRICT) {
+    throw new Error(`REQUIRE_BASH_TESTS=1 but ${why}`);
+  }
+  console.log(`      (skipped: ${why})`);
+  ctx.skip();
+}
+
 // Git Bash on Windows (never WSL's System32\bash.exe), plain bash elsewhere.
 function findBash() {
   if (process.platform !== 'win32') {
@@ -82,7 +92,16 @@ describe('Cloud Build pipelines (static)', function () {
         const ls = spawnSync('git', ['ls-files', '-s', '--', ...shRefs],
           { cwd: ROOT, encoding: 'utf8' });
         const lines = ls.status === 0 ? ls.stdout.trim().split('\n').filter(Boolean) : [];
-        // Skipped where there is no git metadata (e.g. a Cloud Build source without .git).
+        if (lines.length === 0) {
+          // No git metadata (e.g. a Cloud Build source without .git): the mode cannot be read.
+          // Under REQUIRE_BASH_TESTS=1 this fails only when a .git directory exists (M-3, D57).
+          if (STRICT && fs.existsSync(path.join(ROOT, '.git'))) {
+            throw new Error('REQUIRE_BASH_TESTS=1 but git ls-files returned nothing for the referenced scripts');
+          }
+          console.log(`      (WARNING: script modes not checked for ${f}: no git metadata)`);
+          return;
+        }
+        expect(lines.length).to.equal(shRefs.length);
         lines.forEach((l) => expect(l.split(/\s+/)[0], l).to.equal('100755'));
       });
 
@@ -99,12 +118,29 @@ describe('Cloud Build pipelines (static)', function () {
         defined.forEach((d) => expect([...used], d).to.include(d));
       });
 
-      it('escapes shell syntax as $$ (no bare $( or $VAR in step args)', () => {
+      it('escapes shell syntax as $$ (no bare $(, $VAR or ${var}/${VAR:-x} in step args)', () => {
+        const defined = Object.keys(doc.substitutions || {});
         doc.steps.forEach((s) => {
           const t = stepText(s);
           expect(t, s.id).to.not.match(/(^|[^$])\$\(/);
           expect(t, s.id).to.not.match(/(^|[^$])\$[A-Za-z_]/);
+          // Single-$ brace expansions must be exactly ${NAME} (M-2), and NAME a substitution.
+          expect(t, s.id).to.not.match(/(^|[^$])\$\{(?![A-Z_][A-Z0-9_]*\})/);
+          (t.match(/(^|[^$])\$\{([A-Z_][A-Z0-9_]*)\}/g) || []).forEach((m) => {
+            const name = m.replace(/^[^$]?\$\{/, '').replace(/\}$/, '');
+            expect(defined.concat(BUILTINS), `${s.id}: \${${name}}`).to.include(name);
+          });
         });
+      });
+
+      it('the escaping check catches single-$ bash expansions', () => {
+        const bad = ['echo ${var}', 'echo ${VAR:-x}', 'x=$(date)', 'echo $HOME'];
+        bad.forEach((b) => {
+          const caught = /(^|[^$])\$\(/.test(b) || /(^|[^$])\$[A-Za-z_]/.test(b)
+            || /(^|[^$])\$\{(?![A-Z_][A-Z0-9_]*\})/.test(b);
+          expect(caught, b).to.equal(true);
+        });
+        expect(/(^|[^$])\$\{(?![A-Z_][A-Z0-9_]*\})/.test('echo $${var} ${_ORG}')).to.equal(false);
       });
 
       it('holds no token or secret literals, no prod project and no --verbose', () => {
@@ -119,7 +155,7 @@ describe('Cloud Build pipelines (static)', function () {
       it('inline scripts are valid bash', function () {
         const bash = findBash();
         if (!bash) {
-          this.skip();
+          skipOrFail(this, 'no bash was found');
         }
         doc.steps.forEach((s) => {
           const sc = inlineScript(s, doc.substitutions || {});
@@ -234,6 +270,31 @@ describe('Cloud Build pipelines (static)', function () {
           const other = env === 'dev' ? 'staging' : 'dev';
           check.split('\n').filter((l) => l.includes('scripts/')).forEach((l) => expect(l).to.not.include(other));
         });
+
+        it('deploy, wait and SA check also write the flag instead of failing; later proxy steps skip on it (I-1)', () => {
+          const flag = `/workspace/${env}_test_failed`;
+          const writers = [proxyStep, `wait-${env}`, `verify-sa-${env}`, `test-${env}`];
+          writers.forEach((id) => {
+            const t = stepText(step(id));
+            expect(t, id).to.match(new RegExp(`\\|\\| \\{ echo "[^"]+" >&2; touch ${flag}; \\}`));
+            // the flag-writing command is the last one: the step itself never fails
+            expect(t.trim().endsWith(`touch ${flag}; }`), id).to.equal(true);
+          });
+          writers.slice(1).forEach((id) => {
+            const script = step(id).args[step(id).args.indexOf('-c') + 1];
+            expect(script.split('\n')[0].trim(), id).to.equal(
+              `if [ -f ${flag} ]; then echo "Skipped: an earlier ${env} proxy step failed."; exit 0; fi`);
+          });
+          // nothing between the proxy deploy and the check may fail the build hard
+          doc.steps.slice(at(proxyStep), at(`check-${env}-test`)).forEach((s) => {
+            expect(writers, `${s.id} sits between ${proxyStep} and check-${env}-test`).to.include(s.id);
+          });
+          // check step falls back to the highest deployed revision when <env>_revision.txt is missing
+          const check = stepText(step(`check-${env}-test`));
+          expect(check).to.include(`FAILED_REV="$$(cat ${env}_revision.txt 2>/dev/null || true)"`);
+          expect(check).to.include(`scripts/get-deployed-revision.sh \${_ORG} ${env} \${_PROXY}`);
+          expect(check).to.include('"$$FAILED_REV"');
+        });
       });
     });
 
@@ -291,7 +352,7 @@ describe('Cloud Build pipelines (static)', function () {
     it('the guard step refuses _TARGET=prod (and anything but nonprod) and accepts nonprod', function () {
       const bash = findBash();
       if (!bash) {
-        this.skip();
+        skipOrFail(this, 'no bash was found');
       }
       const run = (target) => spawnSync(bash, ['-c', inlineScript(doc.steps[0], { _TARGET: target })],
         { cwd: ROOT, encoding: 'utf8' });

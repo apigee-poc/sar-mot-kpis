@@ -336,7 +336,7 @@ See the policy table in `docs/PLAN.md` section "P5 — Apigee proxy" for the ful
 
 **P8 — Prod**
 - 👤 Provision App Integration in prod project `apigee-prod-511508`
-- 👤 Run `cloudbuild-infra.yaml --substitutions _TARGET=prod`
+- Write `cloudbuild-infra-prod.yaml` (own approved manual trigger, `cb-deploy-prod`; D55), then 👤 run it. `cloudbuild-infra.yaml` refuses prod.
 - `cloudbuild-prod.yaml` manual + approval gate — promotes byte-for-byte what passed staging
 
 **P9 — Docs**

@@ -47,10 +47,21 @@ This document records the tooling, environment setup, and deployment procedures 
 | `cloudbuild-main.yaml` | push to `main` | `cb-deploy-nonprod` | lint + unit tests (unstamped) → stamp → dev (db load, integration apply/assert, debug mask, KVMs, proxy deploy, runtime-SA check, Newman, rollback proxy then integration on failure) → staging (same, promoting the dev proxy revision) → summary |
 | `cloudbuild-infra.yaml` | manual, approval required | `cb-deploy-nonprod` | `infra/01..05` with `infra/env/nonprod.env`; refuses any `_TARGET` other than `nonprod` |
 
-Rollback on a failed Newman run: `scripts/rollback.sh` (proxy) **then** `scripts/rollback-integration.sh`
-(integration), then the integration version is recorded again (the restored version gets a new id, D29).
-A failed integration apply or post-apply assertion rolls back only the integration and stops before the
-proxy. The database is never rolled back (expand-only, AGENTS.md rule 9). Details: D48–D53.
+**Rollback on a failed proxy phase.** This covers a failed deploy/promote, a deployment that never becomes READY, a wrong or missing runtime SA, or a failed Newman run (D54). The build runs `scripts/rollback.sh` (proxy) **then** `scripts/rollback-integration.sh` (integration). It then records the integration version again, because the restored version gets a new id (D29).
+
+**Integration failures.** A failed integration apply or post-apply assertion rolls back only the integration and stops before the proxy.
+
+**Database.** It is never rolled back (expand-only, AGENTS.md rule 9). Rule 9 covers the database only; nothing guarantees that a new integration works with the old proxy.
+
+**Hard failures between the integration publish and the proxy deploy.** If `token-proxy-*`, `debugmask-*`, `record-prev-*` or `create-kvm-*` fails, the new integration is left live, so roll it back by hand with `scripts/rollback-integration.sh` (D54). Details: D48–D58.
+
+**Running the main pipeline.** It runs only from its trigger. With `gcloud builds submit`, `SHORT_SHA` is empty and `stamp-commit.sh` exits 2 before any cloud call. For a manual run use `gcloud builds triggers run sar-mot-kpis-main --branch=main --region=us-central1 --project=ci-cd-511313` (D58).
+
+**Known POC risks (D58):**
+- **Concurrent builds.** Two quick merges can run concurrently against dev/staging. One build's rollback can revert the other's deploy, and both import into the same Cloud SQL instance. **Merge one PR at a time.**
+- **Debug mask.** The debug-mask PATCH (`updateMask=variables`) appends, so a variable removed from `debugmask.json` stays masked in the environment.
+- **Floating image.** `node:22` is a floating tag; pinning `node:22-bookworm` or a digest is open.
+- **Connections.** A changed connection needs a manual or infra run: the pipeline applies integrations with `--skip-connectors=true`.
 
 ### CI/CD triggers (not created yet)
 
@@ -110,7 +121,11 @@ gcloud builds triggers create manual \
   --region="${REGION}" --project="${PROJECT}" --quiet
 ```
 
-The prod trigger (`cloudbuild-prod.yaml`, `cb-deploy-prod`, manual with approval) is P8.
+Notes on these commands:
+- **`--include-logs-with-status` is VERIFY.** It is unclear whether it works with `CLOUD_LOGGING_ONLY` and a user-specified SA on a 2nd-gen repo. If the trigger creation or the GitHub check run fails, drop the flag (D58).
+- **Approvals.** Whoever approves `sar-mot-kpis-infra-nonprod` builds needs `roles/cloudbuild.builds.approver` on `ci-cd-511313`.
+- **Prod triggers are P8.** Both get their own approved manual triggers running as `cb-deploy-prod`: `cloudbuild-prod.yaml` (promotion) and `cloudbuild-infra-prod.yaml` (foundation, D55). `cloudbuild-infra.yaml` refuses any `_TARGET` other than `nonprod`.
+- **Prod guard (D58).** The YAML guard is defence in depth; the real control is IAM. `cb-deploy-nonprod` must have **no role on `apigee-prod-511508`**, because a manual trigger can be run on a branch whose YAML or env file was edited.
 
 ### IAM required per build service account
 
@@ -124,7 +139,14 @@ on the `cb-*` account it attaches.
 | `cb-deploy-nonprod` | On `apigee-nonprod-511322`: `roles/apigee.apiAdminV2` and `roles/apigee.environmentAdmin` (proxy import/deploy, KVMs, debug mask: VERIFY the debugmask PATCH permission on the first run); `roles/integrations.integrationAdmin` (apply, test, publish, rollback); `roles/connectors.admin`; `roles/cloudsql.admin` (`gcloud sql import sql`); `roles/storage.objectAdmin` on `gs://apigee-nonprod-511322-sar-kpi-seed`; `roles/iam.serviceAccountUser` on `sa-kpi-proxy-runtime` and `sa-kpi-connector` (deploy with the runtime SA); `roles/secretmanager.secretAccessor` on the four secrets `sar-mot-poc-app-api-key`, `sar-mot-poc-app-api-secret`, `sar-mot-poc-other-app-api-key`, `sar-mot-poc-other-app-api-secret` (Newman). For `cloudbuild-infra.yaml` it also needs to enable APIs, create service accounts, set IAM policy, create Cloud SQL / PSC resources and secrets (`roles/serviceusage.serviceUsageAdmin`, `roles/iam.serviceAccountAdmin`, `roles/resourcemanager.projectIamAdmin`, `roles/compute.networkAdmin`, `roles/secretmanager.admin`), or a human runs `infra/` once. On `ci-cd-511313`: `roles/logging.logWriter`. | D17, D28, infra/02 (steps 5–8), cicd-workspace DEPLOYMENT |
 | `cb-deploy-prod` | The prod equivalents on `apigee-prod-511508` (P8). | P8 |
 
-The Apigee roles come from cicd-workspace; the Integration, Connectors, Cloud SQL, bucket and
-runtime-SA grants are applied by `infra/02-service-accounts-iam.sh`, which also grants the Newman secret
-access (only for secrets that exist; run it again after `infra/05`). The Application Integration
-service agent needs `roles/connectors.invoker` (D28); `infra/02` exits 3 if the agent is missing.
+**Where the roles come from:**
+- **Apigee roles:** from cicd-workspace.
+- **Integration, Connectors, Cloud SQL, bucket and runtime-SA grants:** applied by `infra/02-service-accounts-iam.sh`.
+- **Newman secret access:**
+  - `infra/05-apigee-products-apps.sh` creates the four secrets and grants `cb-deploy-nonprod` access to them itself, so one fresh `infra/01..05` run is enough (D56).
+  - `infra/02` also grants access on secrets that already exist.
+  - **If the secrets were created some other way, or later, re-run `infra/02` or `infra/05` before the first main build.** Otherwise `test-dev` gets a 403 reading them, and dev is rolled back.
+
+**`infra/02` exits 3** (the infra build then stops before 03–05; fix the cause and re-run, since every script is idempotent) when:
+- the Application Integration service agent is missing (Quick setup, D28; the agent needs `roles/connectors.invoker`), or
+- the IAM policy or a Newman secret cannot be read (permission/API error, reported as such, D56).

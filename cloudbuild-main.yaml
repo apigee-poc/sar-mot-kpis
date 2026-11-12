@@ -2,7 +2,10 @@
 # Trigger: push to main (every merged PR). Service account: cb-deploy-nonprod (set on the
 # trigger, not here). Org/project apigee-nonprod-511322, envs dev then staging, region us-central1.
 #
-# Order (PLAN P7, D48-D53):
+# Run it only from the trigger: with `gcloud builds submit` SHORT_SHA is empty and stamp-commit.sh
+# exits 2 before any cloud call; for a manual run use `gcloud builds triggers run --branch=main`.
+#
+# Order (PLAN P7, D48-D54):
 #   1. npm ci, lint and unit tests on the UNSTAMPED tree (a stamped tree fails kvm-contract tests)
 #   2. stamp commit + KVM version (scripts/stamp-commit.sh), shared token in /workspace/.token
 #   3. dev: db load -> integration (record prev, apply, assert, check/rollback) -> debug mask ->
@@ -13,7 +16,10 @@
 #   5. summary
 # Failure pattern (as cicd-workspace): a test/apply step never fails itself, it writes a flag file
 # in /workspace; the next check step rolls back and exits 1, so nothing after it runs.
-# A hard failure of any other step stops the build where it is (no automatic rollback).
+# Proxy phase (D54): deploy/promote, wait, runtime-SA check and Newman all write the same
+# <env>_test_failed flag, so check-<env>-test rolls back the proxy, then the integration.
+# A hard failure of any other step (db load, token, KVMs, debug mask, record) stops the build where
+# it is, with no automatic rollback; D54 lists what can then stay live.
 # Shell variables and command substitutions are written $$VAR / $$(...) (Cloud Build escaping).
 
 steps:
@@ -126,21 +132,35 @@ steps:
     args: ['scripts/create-versioned-kvm.sh', '${_ORG}', 'dev', '${SHORT_SHA}']
 
   # Imports the stamped bundle and deploys it with sa-kpi-proxy-runtime (apigee.googletoken.email, D16).
+  # From here on, a failure of deploy, wait, SA check or Newman writes /workspace/dev_test_failed and
+  # check-dev-test rolls back the proxy, then the integration (D54): a broken new proxy never stays
+  # live next to the new integration.
   - id: deploy-dev
     name: maven:3.9.9-eclipse-temurin-17
     entrypoint: bash
-    args: ['-c', 'mvn -B -f src/main/apigee/apiproxies/${_PROXY}/pom.xml clean install -Pdev "-Dbearer=$$(cat /workspace/.token)"']
+    args:
+      - -c
+      - |
+        mvn -B -f src/main/apigee/apiproxies/${_PROXY}/pom.xml clean install -Pdev "-Dbearer=$$(cat /workspace/.token)" || { echo "Proxy deploy failed on dev!" >&2; touch /workspace/dev_test_failed; }
 
   # Writes dev_revision.txt.
   - id: wait-dev
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
-    args: ['scripts/wait-for-deployment.sh', '${_ORG}', 'dev', '${_PROXY}', '600']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/dev_test_failed ]; then echo "Skipped: an earlier dev proxy step failed."; exit 0; fi
+        bash scripts/wait-for-deployment.sh ${_ORG} dev ${_PROXY} 600 || { echo "Dev deployment did not become READY!" >&2; touch /workspace/dev_test_failed; }
 
   - id: verify-sa-dev
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
-    args: ['-c', 'bash scripts/assert-proxy-runtime-sa.sh ${_ORG} dev ${_PROXY} "$$(cat dev_revision.txt)"']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/dev_test_failed ]; then echo "Skipped: an earlier dev proxy step failed."; exit 0; fi
+        bash scripts/assert-proxy-runtime-sa.sh ${_ORG} dev ${_PROXY} "$$(cat dev_revision.txt)" || { echo "Dev runtime service account check failed!" >&2; touch /workspace/dev_test_failed; }
 
   - id: test-dev
     name: node:22
@@ -148,9 +168,11 @@ steps:
     args:
       - -c
       - |
+        if [ -f /workspace/dev_test_failed ]; then echo "Skipped: an earlier dev proxy step failed."; exit 0; fi
         bash tests/run-newman.sh dev || { echo "Dev tests failed!" >&2; touch /workspace/dev_test_failed; }
 
-  # Rollback order: proxy first, then integration (the old proxy works with the old integration).
+  # Rollback order: proxy first, then integration. If wait-dev failed, dev_revision.txt may be
+  # missing: the highest deployed revision is then passed as the failed revision.
   - id: check-dev-test
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
@@ -158,15 +180,17 @@ steps:
       - -c
       - |
         if [ -f /workspace/dev_test_failed ]; then
-          echo "Post-deploy tests failed on dev! Rolling back the proxy, then the integration..."
-          bash scripts/rollback.sh ${_ORG} dev ${_PROXY} "$$(cat prev_dev_revision.txt)" "$$(cat dev_revision.txt)" || echo "Proxy rollback FAILED: manual intervention required." >&2
+          echo "Dev proxy deploy/verification/tests failed! Rolling back the proxy, then the integration..."
+          FAILED_REV="$$(cat dev_revision.txt 2>/dev/null || true)"
+          if [ -z "$$FAILED_REV" ]; then FAILED_REV="$$(bash scripts/get-deployed-revision.sh ${_ORG} dev ${_PROXY} || true)"; fi
+          bash scripts/rollback.sh ${_ORG} dev ${_PROXY} "$$(cat prev_dev_revision.txt)" "$$FAILED_REV" || echo "Proxy rollback FAILED: manual intervention required." >&2
           bash scripts/rollback-integration.sh ${_ORG} ${_REGION} sar-kpi-get-dev "$$(cat prev_int_dev.txt)" "$$(cat new_int_dev.txt)" || echo "Integration rollback FAILED: manual intervention required." >&2
           # The restored integration version gets a new id (D29).
           bash scripts/get-published-integration-version.sh ${_ORG} ${_REGION} sar-kpi-get-dev int_dev_after_rollback.txt || true
-          echo "Pipeline halted: dev tests failed and dev was rolled back; staging was not touched." >&2
+          echo "Pipeline halted: dev failed and dev was rolled back; staging was not touched." >&2
           exit 1
         fi
-        echo "Dev tests passed."
+        echo "Dev proxy deployed, verified and tested."
 
   # ================================================================ staging
   # Fresh token: the dev half can take a large part of the token lifetime (about 1 h).
@@ -247,21 +271,33 @@ steps:
     args: ['scripts/create-versioned-kvm.sh', '${_ORG}', 'staging', '${SHORT_SHA}']
 
   # Same revision that passed dev; no new import. deploy-revision.sh attaches sa-kpi-proxy-runtime.
+  # From here on, failures write /workspace/staging_test_failed (D54).
   - id: promote-staging
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
-    args: ['-c', 'bash scripts/deploy-revision.sh ${_ORG} staging ${_PROXY} "$$(cat dev_revision.txt)"']
+    args:
+      - -c
+      - |
+        bash scripts/deploy-revision.sh ${_ORG} staging ${_PROXY} "$$(cat dev_revision.txt)" || { echo "Promotion to staging failed!" >&2; touch /workspace/staging_test_failed; }
 
   # Writes staging_revision.txt; waits for exactly the promoted revision.
   - id: wait-staging
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
-    args: ['-c', 'bash scripts/wait-for-deployment.sh ${_ORG} staging ${_PROXY} 600 "$$(cat dev_revision.txt)"']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/staging_test_failed ]; then echo "Skipped: an earlier staging proxy step failed."; exit 0; fi
+        bash scripts/wait-for-deployment.sh ${_ORG} staging ${_PROXY} 600 "$$(cat dev_revision.txt)" || { echo "Staging deployment did not become READY!" >&2; touch /workspace/staging_test_failed; }
 
   - id: verify-sa-staging
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
-    args: ['-c', 'bash scripts/assert-proxy-runtime-sa.sh ${_ORG} staging ${_PROXY} "$$(cat staging_revision.txt)"']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/staging_test_failed ]; then echo "Skipped: an earlier staging proxy step failed."; exit 0; fi
+        bash scripts/assert-proxy-runtime-sa.sh ${_ORG} staging ${_PROXY} "$$(cat staging_revision.txt)" || { echo "Staging runtime service account check failed!" >&2; touch /workspace/staging_test_failed; }
 
   - id: test-staging
     name: node:22
@@ -269,6 +305,7 @@ steps:
     args:
       - -c
       - |
+        if [ -f /workspace/staging_test_failed ]; then echo "Skipped: an earlier staging proxy step failed."; exit 0; fi
         bash tests/run-newman.sh staging || { echo "Staging tests failed!" >&2; touch /workspace/staging_test_failed; }
 
   - id: check-staging-test
@@ -278,14 +315,16 @@ steps:
       - -c
       - |
         if [ -f /workspace/staging_test_failed ]; then
-          echo "Post-deploy tests failed on staging! Rolling back the staging proxy, then the staging integration..."
-          bash scripts/rollback.sh ${_ORG} staging ${_PROXY} "$$(cat prev_staging_revision.txt)" "$$(cat staging_revision.txt)" || echo "Proxy rollback FAILED: manual intervention required." >&2
+          echo "Staging promotion/verification/tests failed! Rolling back the staging proxy, then the staging integration..."
+          FAILED_REV="$$(cat staging_revision.txt 2>/dev/null || true)"
+          if [ -z "$$FAILED_REV" ]; then FAILED_REV="$$(bash scripts/get-deployed-revision.sh ${_ORG} staging ${_PROXY} || true)"; fi
+          bash scripts/rollback.sh ${_ORG} staging ${_PROXY} "$$(cat prev_staging_revision.txt)" "$$FAILED_REV" || echo "Proxy rollback FAILED: manual intervention required." >&2
           bash scripts/rollback-integration.sh ${_ORG} ${_REGION} sar-kpi-get-staging "$$(cat prev_int_staging.txt)" "$$(cat new_int_staging.txt)" || echo "Integration rollback FAILED: manual intervention required." >&2
           bash scripts/get-published-integration-version.sh ${_ORG} ${_REGION} sar-kpi-get-staging int_staging_after_rollback.txt || true
-          echo "Pipeline halted: staging tests failed and staging was rolled back (dev keeps this commit)." >&2
+          echo "Pipeline halted: staging failed and staging was rolled back (dev keeps this commit)." >&2
           exit 1
         fi
-        echo "Staging tests passed."
+        echo "Staging proxy promoted, verified and tested."
 
   # ================================================================ summary
   - id: summary

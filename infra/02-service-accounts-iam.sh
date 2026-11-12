@@ -2,7 +2,8 @@
 # Creates required service accounts and IAM bindings for SAR MOT KPIs non-prod.
 # Usage: 02-service-accounts-iam.sh [env_file]
 # Exit: 0 all bindings applied; 3 everything else applied but the Application Integration service
-# agent was missing (Quick setup not done, D28) or its connectors.invoker grant failed; other
+# agent was missing (Quick setup not done, D28), the IAM policy or a Newman secret could not be
+# read (permission/API error), or the connectors.invoker grant failed; other
 # non-zero: a gcloud call failed (set -e).
 set -euo pipefail
 
@@ -77,12 +78,22 @@ gcloud iam service-accounts add-iam-policy-binding "${PROXY_RUNTIME_EMAIL}" \
 # A missing agent or a failed grant does NOT stop the later grants; the script exits 3 at the end.
 INTEGRATIONS_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-integrations.iam.gserviceaccount.com"
 INCOMPLETE=""
-AGENT_IN_POLICY="$(gcloud projects get-iam-policy "${PROJECT_ID}" \
+# A failed policy read (e.g. 403, no resourcemanager.projects.getIamPolicy) is reported as such,
+# not as "agent missing" (P7 final review M-5).
+POLICY_READ_OK=1
+if ! AGENT_IN_POLICY="$(gcloud projects get-iam-policy "${PROJECT_ID}" \
   --flatten="bindings[].members" \
   --filter="bindings.members:serviceAccount:${INTEGRATIONS_SERVICE_AGENT}" \
   --format="value(bindings.role)" \
-  --quiet 2>/dev/null || true)"
-if [[ -z "${AGENT_IN_POLICY}" ]]; then
+  --quiet 2>/dev/null)"; then
+  POLICY_READ_OK=0
+  AGENT_IN_POLICY=""
+fi
+if [[ "${POLICY_READ_OK}" == "0" ]]; then
+  echo "WARNING: could not read the IAM policy of ${PROJECT_ID} (permission denied or API error)," >&2
+  echo "         so the Application Integration service agent could not be checked. Skipping roles/connectors.invoker." >&2
+  INCOMPLETE="${INCOMPLETE} connectors.invoker(IAM policy not readable)"
+elif [[ -z "${AGENT_IN_POLICY}" ]]; then
   echo "WARNING: Application Integration service agent ${INTEGRATIONS_SERVICE_AGENT} not found in the" >&2
   echo "         IAM policy of ${PROJECT_ID}. Provision Application Integration in ${REGION:-us-central1}" >&2
   echo "         with the Console Quick setup (D28), then re-run this script. Skipping roles/connectors.invoker." >&2
@@ -161,18 +172,24 @@ else
 fi
 
 # 8. Let the build SA read the four Newman test-app secrets (P7: tests/run-newman.sh in Cloud
-# Build). Secret-level bindings only, each applied only if the secret exists (infra/05 creates them).
+# Build). Secret-level bindings only, each applied only if the secret exists. infra/05 creates the
+# secrets and grants the same access itself (D56), so a fresh 01..05 run is enough.
+# NOT_FOUND means "not created yet"; any other describe error (e.g. 403) is reported as such and
+# marks the run INCOMPLETE (M-5).
 for NEWMAN_SECRET in sar-mot-poc-app-api-key sar-mot-poc-app-api-secret \
                      sar-mot-poc-other-app-api-key sar-mot-poc-other-app-api-secret; do
-  if gcloud secrets describe "${NEWMAN_SECRET}" --project="${PROJECT_ID}" --quiet >/dev/null 2>&1; then
+  if DESCRIBE_ERR="$(gcloud secrets describe "${NEWMAN_SECRET}" --project="${PROJECT_ID}" --quiet 2>&1 >/dev/null)"; then
     echo "Granting roles/secretmanager.secretAccessor on secret ${NEWMAN_SECRET} to ${CB_DEPLOY_SA}..."
     gcloud secrets add-iam-policy-binding "${NEWMAN_SECRET}" \
       --member="serviceAccount:${CB_DEPLOY_SA}" \
       --role="roles/secretmanager.secretAccessor" \
       --project="${PROJECT_ID}" \
       --quiet >/dev/null
+  elif [[ "${DESCRIBE_ERR}" == *NOT_FOUND* || "${DESCRIBE_ERR}" == *"not found"* ]]; then
+    echo "Secret '${NEWMAN_SECRET}' does not exist yet; infra/05 creates it and grants the access."
   else
-    echo "Secret '${NEWMAN_SECRET}' does not exist yet (created by infra/05); re-run this script after infra/05."
+    echo "WARNING: could not check secret '${NEWMAN_SECRET}' (permission denied or API error); skipping its grant." >&2
+    INCOMPLETE="${INCOMPLETE} secretAccessor(${NEWMAN_SECRET}: not readable)"
   fi
 done
 
@@ -183,7 +200,7 @@ done
 if [[ -n "${INCOMPLETE}" ]]; then
   echo "============================================================" >&2
   echo "INCOMPLETE: all other bindings were applied, but not:${INCOMPLETE}" >&2
-  echo "Fix the cause above (D28) and re-run this script (it is idempotent)." >&2
+  echo "Fix the cause above (Quick setup D28, or the caller's permissions) and re-run this script (it is idempotent)." >&2
   echo "============================================================" >&2
   exit 3
 fi

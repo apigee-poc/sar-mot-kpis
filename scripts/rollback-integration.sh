@@ -15,6 +15,11 @@ PROJECT="$1"; REGION="$2"; INTEGRATION="$3"; PREV_VER="${4:-}"; FAILED_VER="${5:
 # PY = first working Python 3: python3, python, else gcloud's bundled one (scripts/lib/python.sh).
 source "$(dirname "${BASH_SOURCE[0]}")/lib/python.sh"
 TOKEN="$(gcloud auth print-access-token 2>/dev/null || ([ -f /workspace/.token ] && cat /workspace/.token) || true)"
+TOKEN="$(printf '%s' "${TOKEN}" | tr -d '\r\n[:space:]')"
+if [[ -z "${TOKEN}" ]]; then
+  echo "ERROR: unable to acquire an access token (gcloud or /workspace/.token)." >&2
+  exit 1
+fi
 BASE="https://integrations.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/integrations/${INTEGRATION}/versions"
 
 WORK="$(mktemp -d)"

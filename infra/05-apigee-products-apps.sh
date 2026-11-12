@@ -251,6 +251,23 @@ print(json.dumps({"name": sys.argv[1], "apiProducts": [sys.argv[2]]}))' "${app}"
 create_app "${APP_MAIN}" "${PRODUCT_MAIN}" "${SECRET_MAIN_KEY}" "${SECRET_MAIN_SECRET}"
 create_app "${APP_OTHER}" "${PRODUCT_OTHER}" "${SECRET_OTHER_KEY}" "${SECRET_OTHER_SECRET}"
 
+# --- Newman secret access for the main pipeline (P7, D49/D56) ------------------------------
+# The secrets exist from here on, so one fresh infra run is enough: grant the non-prod build SA
+# read access on each of the four secrets (secret-level, idempotent). infra/02 keeps its
+# grant-if-exists for secrets that were created earlier.
+if [[ -z "${CB_DEPLOY_SA:-}" ]]; then
+  echo "ERROR: CB_DEPLOY_SA is not set in ${ENV_FILE}." >&2
+  exit 1
+fi
+for secret in "${SECRET_MAIN_KEY}" "${SECRET_MAIN_SECRET}" "${SECRET_OTHER_KEY}" "${SECRET_OTHER_SECRET}"; do
+  echo "Granting roles/secretmanager.secretAccessor on secret ${secret} to ${CB_DEPLOY_SA}..."
+  gcloud secrets add-iam-policy-binding "${secret}" \
+    --member="serviceAccount:${CB_DEPLOY_SA}" \
+    --role="roles/secretmanager.secretAccessor" \
+    --project="${PROJECT_ID}" \
+    --quiet >/dev/null
+done
+
 echo "============================================================"
 echo "SUCCESS: products, developer, apps and credential secrets are in place."
 echo "Secrets (not printed): ${SECRET_MAIN_KEY}, ${SECRET_MAIN_SECRET},"

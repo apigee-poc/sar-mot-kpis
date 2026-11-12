@@ -18,9 +18,12 @@ steps:
     entrypoint: npm
     args: ['run', 'lint']
 
+  # REQUIRE_BASH_TESTS=1: tests that need bash, Python 3 or git metadata FAIL instead of
+  # skipping, so the fail-closed script tests cannot silently guard nothing in CI.
   - id: unit-tests
     name: node:22
     entrypoint: npm
+    env: ['REQUIRE_BASH_TESTS=1']
     args: ['run', 'test:unit']
 
   # @redocly/cli is not a devDependency (adding it needs the registry); pinned exact version via npx.

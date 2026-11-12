@@ -342,8 +342,10 @@ P6 acceptance, using the fault-injection recipes in D39. The Newman suite is P6.
 All in Cloud Build, project `ci-cd-511313`, same triggers and service accounts as
 `cicd-workspace`.
 
-- `cloudbuild-infra.yaml`: manual trigger. Runs `infra/0*.sh` for a chosen `_TARGET`
-  (`nonprod`/`prod`). Never runs automatically.
+- `cloudbuild-infra.yaml`: manual trigger with approval. Runs `infra/0*.sh` for
+  `_TARGET=nonprod` **only** (any other value is refused). Never runs automatically. The prod
+  foundation gets its own `cloudbuild-infra-prod.yaml` on a separate approved trigger as
+  `cb-deploy-prod` in P8 (D55).
 - `cloudbuild-pr.yaml` (`cb-validate`, no cloud access): `npm ci` → apigeelint → unit tests →
   OAS lint (e.g. `@redocly/cli lint`) → integration JSON validation → Maven package.
 - `cloudbuild-main.yaml` (`cb-deploy-nonprod`), on push to `main`:
@@ -352,7 +354,8 @@ All in Cloud Build, project `ci-cd-511313`, same triggers and service accounts a
   2. stamp commit + KVM version (`scripts/stamp-commit.sh`, as in `cicd-workspace`)
   3. `db/load.sh dev` (expand-only migrations + seed)
   4. connections apply for dev (no-op if unchanged)
-  5. record the published integration version, then (with the `integrationcli-builder` image)
+  5. record the published integration version, then (with integrationcli v0.86.0 from the pinned,
+     checksum-verified download `scripts/install-integrationcli.sh`, D48; no builder image)
      `integrationcli integrations apply -f <copy of integration/dev with userLabel stamped>
      --skip-connectors=true --wait=true --run-tests=true` (D20, D23); on failure roll back the
      integration (D25, D29). Also:
@@ -365,7 +368,8 @@ All in Cloud Build, project `ci-cd-511313`, same triggers and service accounts a
      `PATCH https://apigee.googleapis.com/v1/organizations/<org>/environments/<env>/debugmask?updateMask=variables`
      (body `{"variables":[…]}` from `environments/<env>/debugmask.json`; dev was done by hand this way
      in P5, staging and prod are still unmasked), then record the dev proxy revision → create versioned KVMs → deploy proxy with runtime SA →
-     wait → Newman dev → on failure roll back **proxy, then integration**
+     wait → runtime-SA check → Newman dev → on a failure of any of deploy, wait, SA check or
+     Newman, roll back **proxy, then integration** (D54)
   7. repeat steps 3–6 for staging, promoting the **same proxy revision** as in
      `cicd-workspace`
   8. summary: commit, integration versions, proxy revisions
@@ -378,10 +382,12 @@ dev back and staging is untouched.
 (`stamp-commit`, `install-integrationcli`, `apply-integration`, `assert-integration`,
 `deploy-debugmask`, `assert-proxy-runtime-sa`, `lib/python.sh`), the carry-over fixes I-3, M-4 and M-5,
 and the static tests `tests/unit/pipeline-scripts.test.js` and `tests/unit/pipelines.test.js`
-(D48–D53). Step 4 (connections apply) is not a pipeline step: the connections are created by P3/infra
-and integrationcli runs with `--skip-connectors=true`. **Pending (👤):** GitHub remote, Cloud Build
-connection and triggers (DEPLOYMENT.md "CI/CD triggers (not created yet)"), then the acceptance
-run above (D53).
+(D48–D53), plus the final-review fixes (D54–D58: whole proxy phase under rollback,
+fail-closed `get-deployed-revision.sh`, strict `rollback.sh`, Newman secret grants in infra/05,
+strict CI tests). Step 4 (connections apply) is not a pipeline step: the connections are created
+by P3/infra and integrationcli runs with `--skip-connectors=true`, so a changed connection needs a
+manual or infra run. **Pending (👤):** GitHub remote, Cloud Build connection and triggers
+(DEPLOYMENT.md "CI/CD triggers (not created yet)"), then the acceptance run above (D53).
 
 **P7 carry-over from P4 final review (no code yet):**
 - I-3: `scripts/get-published-integration-version.sh` fails open. It must exit non-zero on
@@ -407,8 +413,9 @@ run above (D53).
    `roles/connectors.invoker` on the prod project (the prod variant of
    `infra/02-service-accounts-iam.sh`); without it publish fails with
    `connectors.connections.get` denied.
-2. Run `cloudbuild-infra.yaml` with `_TARGET=prod` (👤 approve). It creates the same
-   foundation, `sar-kpi-sql-prod` / `kpis_prod`, the endpoint attachment, the connection
+2. Write `cloudbuild-infra-prod.yaml` (its own manual trigger with approval, service account
+   `cb-deploy-prod`, `infra/env/prod.env`; D55; `cloudbuild-infra.yaml` stays nonprod-only) and
+   run it (👤 approve). It creates the same foundation, `sar-kpi-sql-prod` / `kpis_prod`, the endpoint attachment, the connection
    `sar-kpi-db-prod`, the runtime SA, and grants for `cb-deploy-prod`.
 3. `cloudbuild-prod.yaml`: manual trigger with approval. It must:
    - find the revision READY in staging

@@ -86,12 +86,49 @@ function markerBin() {
 }
 const called = (dir) => fs.existsSync(path.join(dir, 'called'));
 
+// REQUIRE_BASH_TESTS=1 (set in cloudbuild-pr.yaml): a missing prerequisite FAILS instead of
+// skipping, so the fail-closed script tests cannot silently guard nothing in CI (P7 review M-3).
+const STRICT = process.env.REQUIRE_BASH_TESTS === '1';
+function skipOrFail(ctx, why) {
+  if (STRICT) {
+    throw new Error(`REQUIRE_BASH_TESTS=1 but ${why}`);
+  }
+  console.log(`      (skipped: ${why})`);
+  ctx.skip();
+}
+
+// Fake gcloud (prints the token, or fails when token is empty) and fake curl.
+// FAKE_CURL_LIST: body for URLs ending in /versions; FAKE_CURL_GET: body for any other URL.
+// FAKE_CURL_CODE (default 200); FAKE_CURL_NET=1 simulates a network error.
+function curlBin(token) {
+  const dir = tmpDir('p7-curl-');
+  shim(dir, 'gcloud', token ? `echo "${token}"` : 'exit 1');
+  shim(dir, 'curl', [
+    'out=""; url=""; fail=0; w=0',
+    'while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2;; -w) w=1; shift 2;; -H|-X|-d|--data-urlencode|--data-binary|-F) shift 2;; --fail|--fail-with-body|-f) fail=1; shift;; -*) shift;; *) url="$1"; shift;; esac; done',
+    'if [ "${FAKE_CURL_NET:-0}" = 1 ]; then [ "$w" = 1 ] && printf 000; echo "curl: (6) Could not resolve host" >&2; exit 6; fi',
+    'case "$url" in */versions) body="${FAKE_CURL_LIST:-}";; *) body="${FAKE_CURL_GET:-}";; esac',
+    'code="${FAKE_CURL_CODE:-200}"',
+    'if [ -n "$out" ] && [ -n "$body" ]; then cat "$body" > "$out"; fi',
+    'if [ -z "$out" ] && [ -n "$body" ]; then cat "$body"; fi',
+    '[ "$w" = 1 ] && printf "%s" "$code"',
+    'if [ "$fail" = 1 ] && [ "$code" -ge 400 ]; then echo "curl: (22) The requested URL returned error: $code" >&2; exit 22; fi',
+    'exit 0'
+  ].join('\n'));
+  return dir;
+}
+function bodyFile(obj) {
+  const f = path.join(tmpDir('p7-body-'), 'body.json');
+  fs.writeFileSync(f, typeof obj === 'string' ? obj : JSON.stringify(obj));
+  return posix(f);
+}
+
 describe('P7 pipeline scripts', function () {
   this.timeout(30000);
 
   before(function () {
     if (!BASH) {
-      this.skip();
+      skipOrFail(this, 'no bash was found');
     }
   });
 
@@ -158,8 +195,7 @@ describe('P7 pipeline scripts', function () {
     before(function () {
       const cfg = fs.readFileSync(path.join(BUNDLE, 'policies', 'KVM-GetConfig.xml'), 'utf8');
       if (!cfg.includes('mapIdentifier="sar-mot-kpis-config-__KVM_VERSION__"')) {
-        console.log('      (skipped: the repo bundle is already stamped)');
-        this.skip();
+        skipOrFail(this, 'the repo bundle is already stamped');
       }
     });
 
@@ -272,33 +308,126 @@ describe('P7 pipeline scripts', function () {
     });
   });
 
+  describe('scripts/rollback.sh with a fake curl (M-10)', () => {
+    function rb(code, prev, failed) {
+      return runScript('rollback.sh', ['org', 'dev', 'proxy', prev, failed],
+        { fakebin: curlBin('fake-token-xyz'), env: { FAKE_CURL_CODE: code, FAKE_CURL_GET: bodyFile({}) } });
+    }
+
+    it('undeploy success prints SUCCESS, exit 0', () => {
+      const r = rb('200', '', '7');
+      expect(r.code, r.err).to.equal(0);
+      expect(r.out).to.include('SUCCESS: Failed revision 7 has been undeployed');
+    });
+
+    ['403', '500'].forEach((code) => {
+      it(`undeploy HTTP ${code} exits non-zero without SUCCESS`, () => {
+        const r = rb(code, '', '7');
+        expect(r.code).to.equal(1);
+        expect(r.out).to.not.include('SUCCESS');
+        expect(r.err).to.include(`HTTP ${code}`);
+        expect(r.err).to.not.include('fake-token-xyz');
+      });
+    });
+
+    it('undeploy network error exits non-zero without SUCCESS', () => {
+      const r = runScript('rollback.sh', ['org', 'dev', 'proxy', '', '7'],
+        { fakebin: curlBin('t'), env: { FAKE_CURL_NET: '1' } });
+      expect(r.code).to.equal(1);
+      expect(r.out).to.not.include('SUCCESS');
+    });
+
+    it('fails when neither revision is known', () => {
+      const r = rb('200', '', '');
+      expect(r.code).to.equal(1);
+      expect(r.out).to.not.include('SUCCESS');
+      expect(r.err).to.match(/nothing can be rolled back/);
+    });
+
+    it('a failing redeploy of the previous revision exits non-zero without SUCCESS', () => {
+      const r = rb('500', '6', '7');
+      expect(r.code).to.not.equal(0);
+      expect(r.out).to.not.include('SUCCESS');
+    });
+  });
+
   describe('Python-backed scripts with a fake curl', function () {
     before(function () {
       if (!PYDIR) {
-        this.skip();
+        skipOrFail(this, 'no Python 3 was found');
       }
     });
 
-    // FAKE_CURL_LIST / FAKE_CURL_GET: body files for the versions list / one version GET.
-    // FAKE_CURL_CODE (default 200); FAKE_CURL_NET=1 simulates a network error.
-    function curlBin(token) {
-      const dir = tmpDir('p7-curl-');
-      shim(dir, 'gcloud', token ? `echo "${token}"` : 'exit 1');
-      shim(dir, 'curl', [
-        'out=""; url=""',
-        'while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2;; -*) shift;; *) url="$1"; shift;; esac; done',
-        'if [ "${FAKE_CURL_NET:-0}" = 1 ]; then printf 000; echo "curl: (6) Could not resolve host" >&2; exit 6; fi',
-        'case "$url" in */versions) body="${FAKE_CURL_LIST:-}";; *) body="${FAKE_CURL_GET:-}";; esac',
-        'if [ -n "$out" ] && [ -n "$body" ]; then cat "$body" > "$out"; fi',
-        'printf "%s" "${FAKE_CURL_CODE:-200}"'
-      ].join('\n'));
-      return dir;
-    }
-    function bodyFile(obj) {
-      const f = path.join(tmpDir('p7-body-'), 'body.json');
-      fs.writeFileSync(f, typeof obj === 'string' ? obj : JSON.stringify(obj));
-      return posix(f);
-    }
+    describe('get-deployed-revision.sh fails closed (I-4)', () => {
+      function dep(env, token) {
+        return runScript('get-deployed-revision.sh', ['org', 'dev', 'proxy'],
+          { fakebin: curlBin(token === undefined ? 'fake-token-xyz' : token), python: true, env });
+      }
+
+      it('200 with deployments prints the highest revision', () => {
+        const r = dep({ FAKE_CURL_GET: bodyFile({ deployments: [{ revision: '6' }, { revision: '12' }] }) });
+        expect(r.code, r.err).to.equal(0);
+        expect(r.out).to.equal('12');
+        expect(r.err).to.not.include('fake-token-xyz');
+      });
+
+      it('writes the revision to the optional output file', () => {
+        const out = path.join(tmpDir('p7-out-'), 'r.txt');
+        const r = runScript('get-deployed-revision.sh', ['org', 'dev', 'proxy', posix(out)], {
+          fakebin: curlBin('t'), python: true, env: { FAKE_CURL_GET: bodyFile({ deployments: [{ revision: '3' }] }) }
+        });
+        expect(r.code, r.err).to.equal(0);
+        expect(r.out).to.equal('');
+        expect(fs.readFileSync(out, 'utf8').trim()).to.equal('3');
+      });
+
+      it('200 without deployments prints an empty string, exit 0', () => {
+        const r = dep({ FAKE_CURL_GET: bodyFile({}) });
+        expect(r.code, r.err).to.equal(0);
+        expect(r.out).to.equal('');
+      });
+
+      it('404 prints an empty string, exit 0', () => {
+        const r = dep({ FAKE_CURL_CODE: '404', FAKE_CURL_GET: bodyFile({ error: { code: 404 } }) });
+        expect(r.code, r.err).to.equal(0);
+        expect(r.out).to.equal('');
+      });
+
+      ['401', '403', '500', '503'].forEach((code) => {
+        it(`HTTP ${code} exits non-zero and writes no output file`, () => {
+          const out = path.join(tmpDir('p7-out-'), 'r.txt');
+          const r = runScript('get-deployed-revision.sh', ['org', 'dev', 'proxy', posix(out)], {
+            fakebin: curlBin('t'), python: true,
+            env: { FAKE_CURL_CODE: code, FAKE_CURL_GET: bodyFile({ error: { code: Number(code) } }) }
+          });
+          expect(r.code).to.equal(1);
+          expect(r.err).to.include(`HTTP ${code}`);
+          expect(fs.existsSync(out)).to.equal(false);
+        });
+      });
+
+      it('a network error exits non-zero', () => {
+        const r = dep({ FAKE_CURL_NET: '1' });
+        expect(r.code).to.equal(1);
+        expect(r.err).to.match(/network error/);
+      });
+
+      it('a 200 body that is not JSON exits non-zero', () => {
+        const r = dep({ FAKE_CURL_GET: bodyFile('<html>oops</html>') });
+        expect(r.code).to.equal(1);
+        expect(r.err).to.match(/could not parse/);
+      });
+
+      it('an empty token exits non-zero', function () {
+        if (fs.existsSync('/workspace/.token')) {
+          this.skip();
+        }
+        const r = dep({ FAKE_CURL_GET: bodyFile({}) }, '');
+        expect(r.code).to.equal(1);
+        expect(r.err).to.match(/access token/);
+      });
+    });
+
     const PREFIX = 'projects/p/locations/us-central1/integrations/i/versions/';
     const LIST = {
       integrationVersions: [
