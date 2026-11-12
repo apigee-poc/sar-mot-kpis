@@ -18,7 +18,7 @@
 | P5 | Apigee proxy | ✅ DONE | `80ad235` |
 | P6 | Tests (unit, Newman, integration) | ✅ DONE `6919831` | Suite green on dev rev 7 (24 req / 260 assertions); rows 6, 7, 13, 16 verified on scratch revs 8-11 (D45, D46); rows 14/15 waived (D44); V3/V9 in D46 |
 | P7 | CI/CD pipelines (PR + non-prod) | ✅ DONE `9dfd5fc` (files); live acceptance pending | Pipelines and scripts written and statically tested (D48–D53). Triggers not created: no git remote yet (DEPLOYMENT.md "CI/CD triggers (not created yet)") |
-| P8 | Prod foundation + prod pipeline | ⏳ TODO | — |
+| P8 | Prod foundation + prod pipeline | ✅ DONE (files; prod run pending) | Branch `p8-prod`: prod env/guards, infra/06, integration/prod, prod scripts, `cloudbuild-infra-prod.yaml`, `cloudbuild-prod.yaml`, static tests, runbook (D59–D66). Nothing ran against prod; the user checklist is in DEPLOYMENT.md "Prod (P8)" → "What YOU must run/approve" |
 | P9 | Documentation + acceptance demo | ⏳ TODO | — |
 
 ---
@@ -338,6 +338,10 @@ See the policy table in `docs/PLAN.md` section "P5 — Apigee proxy" for the ful
 - 👤 Provision App Integration in prod project `apigee-prod-511508`
 - Write `cloudbuild-infra-prod.yaml` (own approved manual trigger, `cb-deploy-prod`; D55), then 👤 run it. `cloudbuild-infra.yaml` refuses prod.
 - `cloudbuild-prod.yaml` manual + approval gate — promotes byte-for-byte what passed staging
+- **State (2026-11-12):** files written and statically tested on `p8-prod` (IN REVIEW). 👤 Next:
+  work through the checklist "What YOU must run/approve" in `docs/DEPLOYMENT.md` ("Prod (P8)").
+  It covers Quick setup, the bootstrap IAM, the read-only staging grant (D60), the triggers, the
+  infra-prod run, the release run and the credential handover. Then record the first-run VERIFY results.
 
 **P9 — Docs**
 - `README.md`, `docs/DEPLOYMENT.md`, `docs/ACCEPTANCE.md` (one row per error-catalog case with evidence)

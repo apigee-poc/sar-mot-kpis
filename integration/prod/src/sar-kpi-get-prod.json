@@ -1,0 +1,176 @@
+{
+  "description": "SAR MOT KPIs: returns approved KPI records (kpiCode, year, optional quarter) from Cloud SQL via the sar-kpi-db connection.",
+  "triggerConfigs": [
+    {
+      "label": "API Trigger",
+      "startTasks": [
+        {
+          "taskId": "1"
+        }
+      ],
+      "properties": {
+        "Trigger name": "sar-kpi-get-prod"
+      },
+      "triggerType": "API",
+      "triggerNumber": "1",
+      "triggerId": "api_trigger/sar-kpi-get-prod",
+      "inputVariables": {
+        "names": [
+          "kpiCode",
+          "year",
+          "quarter"
+        ]
+      },
+      "outputVariables": {
+        "names": [
+          "data"
+        ]
+      }
+    }
+  ],
+  "taskConfigs": [
+    {
+      "task": "JavaScriptTask",
+      "taskId": "1",
+      "parameters": {
+        "script": {
+          "key": "script",
+          "value": {
+            "stringValue": "function executeScript(event) {\n  // JS-BuildConnectorInput: builds the ExecuteCustomQuery input for task 2.\n  // quarter 0 means \"all quarters\" and is sent to the query as NULL.\n  var quarter = Number(event.getParameter(\"quarter\"));\n  var quarterParam = (!quarter) ? null : quarter;\n  var payload = {\n    query: \"SELECT quarter, year, actual, load_time\\n\" +\n      \"FROM kpi_records\\n\" +\n      \"WHERE kpi_code = ?\\n\" +\n      \"  AND year = ?\\n\" +\n      \"  AND (CAST(? AS SMALLINT) IS NULL OR quarter = ?)\\n\" +\n      \"ORDER BY quarter\",\n    queryParameters: [\n      { value: String(event.getParameter(\"kpiCode\")), dataType: \"VARCHAR\" },\n      { value: Number(event.getParameter(\"year\")), dataType: \"INTEGER\" },\n      { value: quarterParam, dataType: \"INTEGER\" },\n      { value: quarterParam, dataType: \"INTEGER\" }\n    ],\n    timeout: 30,\n    maxRows: 10\n  };\n  event.setParameter(\"`Task_2_connectorInputPayload`\", payload);\n}\n"
+          }
+        }
+      },
+      "nextTasks": [
+        {
+          "taskId": "2"
+        }
+      ],
+      "taskExecutionStrategy": "WHEN_ALL_SUCCEED",
+      "displayName": "JS-BuildConnectorInput",
+      "failurePolicy": {
+        "retryStrategy": "FATAL"
+      },
+      "synchronousCallFailurePolicy": {
+        "retryStrategy": "FATAL"
+      },
+      "externalTaskType": "NORMAL_TASK"
+    },
+    {
+      "task": "GenericConnectorTask",
+      "taskId": "2",
+      "parameters": {
+        "config": {
+          "key": "config",
+          "value": {
+            "jsonValue": "{\n  \"@type\": \"type.googleapis.com/enterprise.crm.eventbus.proto.connectors.GenericConnectorTaskConfig\",\n  \"connection\": {\n    \"connectionName\": \"projects/apigee-prod-511508/locations/us-central1/connections/sar-kpi-db-prod\",\n    \"serviceName\": \"projects/__PROD_CONNECTORS_TENANT_PROJECT__/locations/us-central1/namespaces/connectors/services/runtime\",\n    \"connectorVersion\": \"projects/apigee-prod-511508/locations/global/providers/default/connectors/postgresql/versions/1\"\n  },\n  \"operation\": \"EXECUTE_ACTION\"\n}"
+          }
+        },
+        "actionName": {
+          "key": "actionName",
+          "value": {
+            "stringValue": "ExecuteCustomQuery"
+          }
+        },
+        "connectorInputPayload": {
+          "key": "connectorInputPayload",
+          "value": {
+            "stringValue": "$`Task_2_connectorInputPayload`$"
+          }
+        },
+        "connectorOutputPayload": {
+          "key": "connectorOutputPayload",
+          "value": {
+            "stringValue": "$`Task_2_connectorOutputPayload`$"
+          }
+        }
+      },
+      "nextTasks": [
+        {
+          "taskId": "3"
+        }
+      ],
+      "taskExecutionStrategy": "WHEN_ALL_SUCCEED",
+      "displayName": "CON-QueryKpiRecords",
+      "failurePolicy": {
+        "retryStrategy": "FATAL"
+      },
+      "synchronousCallFailurePolicy": {
+        "retryStrategy": "FATAL"
+      },
+      "externalTaskType": "NORMAL_TASK"
+    },
+    {
+      "task": "JavaScriptTask",
+      "taskId": "3",
+      "parameters": {
+        "script": {
+          "key": "script",
+          "value": {
+            "stringValue": "function executeScript(event) {\n  // JS-TransformOutput: maps connector rows to the OAS KpiRecord shape.\n  // Output is always {records: [...]} ({records: []} when there are no rows), never null.\n  function toIsoUtc(value) {\n    var d;\n    if (typeof value === \"number\") {\n      d = new Date(value);\n    } else {\n      var s = String(value).trim()\n        .replace(/^(\\d{4}-\\d{2}-\\d{2})[ T]/, \"$1T\")\n        .replace(/(T\\d{2}:\\d{2}:\\d{2})\\.\\d+/, \"$1\")\n        .replace(/([+-]\\d{2})$/, \"$1:00\")\n        .replace(/([+-]\\d{2})(\\d{2})$/, \"$1:$2\");\n      if (!/(Z|[+-]\\d{2}:\\d{2})$/i.test(s)) {\n        s = s + \"Z\";\n      }\n      d = new Date(s);\n    }\n    if (isNaN(d.getTime())) {\n      throw new Error(\"Invalid load_time value from connector: \" + value);\n    }\n    return d.toISOString().replace(/\\.\\d{3}Z$/, \"Z\");\n  }\n\n  var rows = event.getParameter(\"`Task_2_connectorOutputPayload`\");\n  if (typeof rows === \"string\") {\n    rows = rows.trim() === \"\" ? [] : JSON.parse(rows);\n  }\n  if (rows === null || rows === undefined) {\n    rows = [];\n  }\n  if (!Array.isArray(rows)) {\n    throw new Error(\"Connector output is not an array\");\n  }\n  var data = rows.map(function (r) {\n    return {\n      quarter: Number(r.quarter),\n      year: Number(r.year),\n      actual: Number(r.actual),\n      loadTime: toIsoUtc(r.load_time)\n    };\n  });\n  // A JSON_VALUE variable only accepts an object: a bare array and JSON text are both\n  // rejected at runtime (\"is not a Json value\"). So wrap the array (D26).\n  event.setParameter(\"data\", { records: data });\n}\n"
+          }
+        }
+      },
+      "taskExecutionStrategy": "WHEN_ALL_SUCCEED",
+      "displayName": "JS-TransformOutput",
+      "failurePolicy": {
+        "retryStrategy": "FATAL"
+      },
+      "synchronousCallFailurePolicy": {
+        "retryStrategy": "FATAL"
+      },
+      "externalTaskType": "NORMAL_TASK"
+    }
+  ],
+  "integrationParameters": [
+    {
+      "key": "kpiCode",
+      "dataType": "STRING_VALUE",
+      "displayName": "kpiCode",
+      "inputOutputType": "IN",
+      "description": "KPI code, e.g. total_freight."
+    },
+    {
+      "key": "year",
+      "dataType": "INT_VALUE",
+      "displayName": "year",
+      "inputOutputType": "IN",
+      "description": "Gregorian year (2000-2099)."
+    },
+    {
+      "key": "quarter",
+      "dataType": "INT_VALUE",
+      "defaultValue": {
+        "intValue": "0"
+      },
+      "displayName": "quarter",
+      "inputOutputType": "IN",
+      "description": "Quarter 1-4; 0 means all quarters."
+    },
+    {
+      "key": "data",
+      "dataType": "JSON_VALUE",
+      "defaultValue": {
+        "jsonValue": "{\"records\": []}"
+      },
+      "displayName": "data",
+      "inputOutputType": "OUT",
+      "jsonSchema": "{\n  \"$schema\": \"http://json-schema.org/draft-04/schema#\",\n  \"type\": \"object\",\n  \"required\": [\n    \"records\"\n  ],\n  \"properties\": {\n    \"records\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"required\": [\n          \"quarter\",\n          \"year\",\n          \"actual\",\n          \"loadTime\"\n        ],\n        \"properties\": {\n          \"quarter\": {\n            \"type\": \"number\"\n          },\n          \"year\": {\n            \"type\": \"number\"\n          },\n          \"actual\": {\n            \"type\": \"number\"\n          },\n          \"loadTime\": {\n            \"type\": \"string\"\n          }\n        }\n      }\n    }\n  }\n}",
+      "description": "Object {records: KpiRecord[]} (OAS records); {records: []} when there are no rows."
+    },
+    {
+      "key": "`Task_2_connectorInputPayload`",
+      "dataType": "JSON_VALUE",
+      "displayName": "`Task_2_connectorInputPayload`",
+      "isTransient": true,
+      "producer": "1_2"
+    },
+    {
+      "key": "`Task_2_connectorOutputPayload`",
+      "dataType": "JSON_VALUE",
+      "displayName": "`Task_2_connectorOutputPayload`",
+      "isTransient": true,
+      "producer": "1_2"
+    }
+  ],
+  "databasePersistencePolicy": "DATABASE_PERSISTENCE_POLICY_UNSPECIFIED"
+}

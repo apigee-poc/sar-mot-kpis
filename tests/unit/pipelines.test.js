@@ -339,7 +339,10 @@ describe('Cloud Build pipelines (static)', function () {
     it('defaults to nonprod and runs infra/01..05 in order, each printed first', () => {
       expect(doc.substitutions).to.deep.equal({ _TARGET: 'nonprod' });
       expect(doc.steps[0].id).to.equal('guard-target');
-      const scripts = fs.readdirSync(path.join(ROOT, 'infra')).filter((f) => /^0\d-.*\.sh$/.test(f)).sort();
+      // infra/06 is the prod-only product/app script (P8): never part of the non-prod pipeline.
+      expect(fileText(doc)).to.not.include('06-apigee-prod-product-app');
+      const scripts = fs.readdirSync(path.join(ROOT, 'infra'))
+        .filter((f) => /^0\d-.*\.sh$/.test(f) && f !== '06-apigee-prod-product-app.sh').sort();
       const steps = doc.steps.slice(1);
       expect(steps.map((s) => s.id)).to.deep.equal(scripts.map((f) => `infra-${f.replace(/\.sh$/, '')}`));
       steps.forEach((s, i) => {

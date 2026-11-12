@@ -1,0 +1,167 @@
+# PROD foundation pipeline (Cloud Build, project ci-cd-511313), P8, D55.
+# Trigger: its OWN manual trigger with approval (--require-approval); never runs on push.
+# Service account: cb-deploy-prod (set on the trigger, not here). Target: project / Apigee org
+# apigee-prod-511508, region us-central1, env file infra/env/prod.env (fixed, never derived).
+#
+# BILLABLE: infra/03 creates the Cloud SQL instance sar-kpi-sql-prod (db-custom-1-3840) and
+# infra/04 the PSC endpoint attachment sar-kpi-sql-prod-ea. Approve only on purpose (AGENTS.md rule 3).
+#
+# Prerequisites (human, before the first run; nothing here can do them):
+#   1. Console "Quick setup" of Application Integration in apigee-prod-511508 / us-central1 (D28).
+#      It creates the integrations service agent and provisions the Connectors runtime, which
+#      infra/02 (connectors.invoker grant), infra/04 and create-connection need.
+#   2. Bootstrap roles for cb-deploy-prod on apigee-prod-511508 (chicken and egg: infra/02 cannot
+#      grant them to itself), at least serviceusage.serviceUsageAdmin, iam.serviceAccountAdmin,
+#      resourcemanager.projectIamAdmin, secretmanager.admin and storage.admin; infra/02 then grants
+#      the rest (integrationAdmin, connectors.admin, cloudsql.admin, serviceAccountUser, the Apigee
+#      roles). Exact list and commands: docs/DEPLOYMENT.md. cb-deploy-nonprod must hold NO role on
+#      the prod project (D58).
+#   3. Decide MOT_DEVELOPER_EMAIL (infra/env/prod.env) before the first run: infra/06 REFUSES an
+#      @example.com placeholder (exit 1, after infra/01-04 and the connection already ran) unless
+#      ALLOW_PLACEHOLDER_MOT_EMAIL="1" is committed to prod.env on purpose (D67).
+#   Approvers need roles/cloudbuild.builds.approver.
+# Least privilege (P8 final review M2, D67): the bootstrap roles (projectIamAdmin,
+# serviceAccountAdmin, secretmanager.admin, storage.admin, ...) stay on cb-deploy-prod, which also
+# runs every release build. That is an accepted POC risk; a separate infra SA (cb-infra-prod) for
+# this pipeline is a listed follow-up. TRIGGER_NAME in guard-target is mistake-proofing only.
+#
+# Order: guard -> install integrationcli -> infra/01 -> 02 -> 03 -> 04 -> create-connection -> 06
+# -> final check. Each script is printed before it runs (they hold no secrets; credentials go to
+# Secret Manager only). Every guarded step passes BUILD_ID and TARGET=prod explicitly
+# (infra/lib/guard.sh and scripts/lib/prod-guard.sh refuse without them).
+# infra/02 exit 3 (D50, M-5: the integrations service agent is missing or a policy/secret was not
+# readable; every other grant WAS applied): reported loudly, the remaining steps still run, and the
+# last step fails the build. Any other non-zero exit stops the build at once. Every script is
+# idempotent: fix the cause and re-run.
+# Shell variables and command substitutions are written $$VAR / $$(...) (Cloud Build escaping).
+
+steps:
+  - id: guard-target
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ "${_TARGET}" != "prod" ]; then
+          echo "Refusing _TARGET='${_TARGET}': this pipeline runs the PROD foundation only (infra/env/prod.env); the non-prod foundation is cloudbuild-infra.yaml." >&2
+          exit 1
+        fi
+        # Mistake-proofing, not a security control: TRIGGER_NAME can be supplied by hand (D67).
+        if [ "${TRIGGER_NAME}" != "sar-mot-kpis-infra-prod" ]; then
+          echo "Refusing TRIGGER_NAME='${TRIGGER_NAME}': run this pipeline from its trigger sar-mot-kpis-infra-prod, not gcloud builds submit." >&2
+          exit 1
+        fi
+        test -f infra/env/prod.env || { echo "infra/env/prod.env not found" >&2; exit 1; }
+        echo "Target: ${_TARGET} (infra/env/prod.env), trigger ${TRIGGER_NAME}, build ${BUILD_ID}"
+        # Key names only: the values (MOT_DEVELOPER_EMAIL, D41/D63) stay out of the build log.
+        echo "prod.env keys: $$(grep -oE '^[A-Z_][A-Z0-9_]*=' infra/env/prod.env | tr -d '=' | tr '\n' ' ')"
+
+  - id: install-integrationcli
+    name: node:22
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args: ['scripts/install-integrationcli.sh', '0.86.0', '/workspace/bin']
+
+  - id: infra-01-enable-apis
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        echo "===== infra/01-enable-apis.sh ====="; cat infra/01-enable-apis.sh
+        bash infra/01-enable-apis.sh infra/env/prod.env
+
+  # Exit 3 = INCOMPLETE (D50): reported, later steps still run, check-infra-02 fails the build.
+  - id: infra-02-service-accounts-iam
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        echo "===== infra/02-service-accounts-iam.sh ====="; cat infra/02-service-accounts-iam.sh
+        RC=0
+        bash infra/02-service-accounts-iam.sh infra/env/prod.env || RC=$$?
+        if [ "$$RC" = "3" ]; then
+          echo "############################################################" >&2
+          echo "infra/02 is INCOMPLETE (exit 3): the integrations service agent is missing (do the" >&2
+          echo "Application Integration Quick setup in apigee-prod-511508, D28) or the IAM policy or a" >&2
+          echo "secret was not readable. All other grants were applied. The remaining steps run now;" >&2
+          echo "check-infra-02 FAILS this build at the end. Fix the cause and re-run the pipeline." >&2
+          echo "############################################################" >&2
+          touch /workspace/infra02_incomplete
+          exit 0
+        fi
+        exit "$$RC"
+
+  - id: infra-03-cloudsql-private
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        echo "===== infra/03-cloudsql-private.sh ====="; cat infra/03-cloudsql-private.sh
+        bash infra/03-cloudsql-private.sh infra/env/prod.env
+
+  # The Connectors tenant project is resolved by curl (scripts/lib/connectors-tenant.sh, prod only);
+  # /workspace/bin/integrationcli (installed above) runs `endpoints create`.
+  - id: infra-04-psc-endpoint-attachment
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        echo "===== infra/04-psc-endpoint-attachment.sh ====="; cat infra/04-psc-endpoint-attachment.sh
+        bash infra/04-psc-endpoint-attachment.sh infra/env/prod.env
+
+  # Fresh token for the node:22 step below (Cloud SQL and PSC waits use up token lifetime); never printed.
+  - id: token-connection
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args: ['-c', 'gcloud auth print-access-token > /workspace/.token']
+
+  - id: create-connection-prod
+    name: node:22
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        echo "===== scripts/create-connection.sh ====="; cat scripts/create-connection.sh
+        bash scripts/create-connection.sh prod
+
+  - id: infra-06-apigee-prod-product-app
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        echo "===== infra/06-apigee-prod-product-app.sh ====="; cat infra/06-apigee-prod-product-app.sh
+        bash infra/06-apigee-prod-product-app.sh infra/env/prod.env
+
+  - id: check-infra-02
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/infra02_incomplete ]; then
+          echo "FAILED: infra/02 was INCOMPLETE (exit 3, see its step log). Do the Application Integration Quick setup in apigee-prod-511508 (D28) or fix the read permission, then re-run this pipeline." >&2
+          exit 1
+        fi
+        echo "Prod foundation complete: infra/01-04, sar-kpi-db-prod and infra/06 applied."
+
+substitutions:
+  _TARGET: prod
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 5400s

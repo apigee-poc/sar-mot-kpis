@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Creates required service accounts and IAM bindings for SAR MOT KPIs non-prod.
+# Creates required service accounts and IAM bindings for SAR MOT KPIs (non-prod, or prod with
+# infra/env/prod.env inside Cloud Build with TARGET=prod: infra/lib/guard.sh, P8).
 # Usage: 02-service-accounts-iam.sh [env_file]
 # Exit: 0 all bindings applied; 3 everything else applied but the Application Integration service
 # agent was missing (Quick setup not done, D28), the IAM policy or a Newman secret could not be
@@ -17,6 +18,12 @@ fi
 
 # shellcheck source=/dev/null
 source "${ENV_FILE}"
+
+# Prod guard (AGENTS.md rule 2, P8): prod only inside Cloud Build with TARGET=prod; refuses a
+# TARGET/project mismatch. Runs before any gcloud call.
+# shellcheck source=lib/guard.sh
+source "${SCRIPT_DIR}/lib/guard.sh"
+infra_guard "$(basename "${BASH_SOURCE[0]}")"
 
 echo "============================================================"
 echo "Configuring Service Accounts and IAM in project: ${PROJECT_ID}"
@@ -110,7 +117,8 @@ else
   fi
 fi
 
-# 5. Grant cb-deploy-nonprod roles in apigee-nonprod-511322
+# 5. Grant the build SA (CB_DEPLOY_SA: cb-deploy-nonprod, or cb-deploy-prod with prod.env) its
+# deployment roles in PROJECT_ID
 echo "Granting deployment roles to ${CB_DEPLOY_SA}..."
 
 # Integration Admin (publish / manage integrations)
@@ -148,6 +156,21 @@ gcloud iam service-accounts add-iam-policy-binding "${CONNECTOR_EMAIL}" \
   --project="${PROJECT_ID}" \
   --quiet >/dev/null
 
+# 5b. PROD ONLY (IS_PROD=1 from infra/lib/guard.sh, which also pins CB_DEPLOY_SA to
+# cb-deploy-prod there): the Apigee deploy roles (proxy import/deploy, KVMs, debug mask;
+# developerAdmin for the infra/06 developers and apps; VERIFY the minimal set on the first prod
+# run). cb-deploy-nonprod got them from cicd-workspace, so non-prod runs are unchanged.
+if [[ "${IS_PROD}" == "1" ]]; then
+  for APIGEE_ROLE in roles/apigee.apiAdminV2 roles/apigee.environmentAdmin roles/apigee.developerAdmin; do
+    echo "Granting ${APIGEE_ROLE} to ${CB_DEPLOY_SA}..."
+    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+      --member="serviceAccount:${CB_DEPLOY_SA}" \
+      --role="${APIGEE_ROLE}" \
+      --condition=None \
+      --quiet >/dev/null
+  done
+fi
+
 # 6. Bind secretAccessor on DB secret if secret exists
 if gcloud secrets describe "${DB_SECRET_NAME}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
   echo "Granting roles/secretmanager.secretAccessor on secret ${DB_SECRET_NAME} to ${CONNECTOR_EMAIL}..."
@@ -156,6 +179,16 @@ if gcloud secrets describe "${DB_SECRET_NAME}" --project="${PROJECT_ID}" >/dev/n
     --role="roles/secretmanager.secretAccessor" \
     --project="${PROJECT_ID}" \
     --quiet >/dev/null
+  # 6b. PROD ONLY: scripts/create-connection.sh reads this secret's latest version METADATA (the
+  # version number it references; never the payload): roles/secretmanager.viewer, secret-level.
+  if [[ "${IS_PROD}" == "1" ]]; then
+    echo "Granting roles/secretmanager.viewer on secret ${DB_SECRET_NAME} to ${CB_DEPLOY_SA}..."
+    gcloud secrets add-iam-policy-binding "${DB_SECRET_NAME}" \
+      --member="serviceAccount:${CB_DEPLOY_SA}" \
+      --role="roles/secretmanager.viewer" \
+      --project="${PROJECT_ID}" \
+      --quiet >/dev/null
+  fi
 else
   echo "Secret '${DB_SECRET_NAME}' does not exist yet; secret-level binding will be applied in Phase P2."
 fi
@@ -176,8 +209,22 @@ fi
 # secrets and grants the same access itself (D56), so a fresh 01..05 run is enough.
 # NOT_FOUND means "not created yet"; any other describe error (e.g. 403) is reported as such and
 # marks the run INCOMPLETE (M-5).
-for NEWMAN_SECRET in sar-mot-poc-app-api-key sar-mot-poc-app-api-secret \
-                     sar-mot-poc-other-app-api-key sar-mot-poc-other-app-api-secret; do
+# PROD ONLY (IS_PROD=1): the list is NEWMAN_SECRETS from prod.env (the two smoke-app secrets;
+# the MOT handover app's secrets get no direct grant; infra/06 creates them. The build SA can still
+# read them through roles/apigee.developerAdmin or roles/secretmanager.admin while it holds those, D67).
+# Non-prod: always the four non-prod secrets below (NEWMAN_SECRETS is ignored).
+NEWMAN_SECRET_LIST=(sar-mot-poc-app-api-key sar-mot-poc-app-api-secret \
+                    sar-mot-poc-other-app-api-key sar-mot-poc-other-app-api-secret)
+NEWMAN_SECRET_CREATOR="infra/05"
+if [[ "${IS_PROD}" == "1" ]]; then
+  read -r -a NEWMAN_SECRET_LIST <<< "${NEWMAN_SECRETS:-}"
+  if [[ ${#NEWMAN_SECRET_LIST[@]} -eq 0 ]]; then
+    echo "ERROR: NEWMAN_SECRETS is not set in ${ENV_FILE}." >&2
+    exit 1
+  fi
+  NEWMAN_SECRET_CREATOR="infra/06"
+fi
+for NEWMAN_SECRET in "${NEWMAN_SECRET_LIST[@]}"; do
   if DESCRIBE_ERR="$(gcloud secrets describe "${NEWMAN_SECRET}" --project="${PROJECT_ID}" --quiet 2>&1 >/dev/null)"; then
     echo "Granting roles/secretmanager.secretAccessor on secret ${NEWMAN_SECRET} to ${CB_DEPLOY_SA}..."
     gcloud secrets add-iam-policy-binding "${NEWMAN_SECRET}" \
@@ -186,7 +233,7 @@ for NEWMAN_SECRET in sar-mot-poc-app-api-key sar-mot-poc-app-api-secret \
       --project="${PROJECT_ID}" \
       --quiet >/dev/null
   elif [[ "${DESCRIBE_ERR}" == *NOT_FOUND* || "${DESCRIBE_ERR}" == *"not found"* ]]; then
-    echo "Secret '${NEWMAN_SECRET}' does not exist yet; infra/05 creates it and grants the access."
+    echo "Secret '${NEWMAN_SECRET}' does not exist yet; ${NEWMAN_SECRET_CREATOR} creates it and grants the access."
   else
     echo "WARNING: could not check secret '${NEWMAN_SECRET}' (permission denied or API error); skipping its grant." >&2
     INCOMPLETE="${INCOMPLETE} secretAccessor(${NEWMAN_SECRET}: not readable)"
