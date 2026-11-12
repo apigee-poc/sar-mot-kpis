@@ -13,7 +13,7 @@ Agents update the status line of a phase when they start or finish it.
 | P4 | Application Integration | DONE (3400476) |
 | P5 | Apigee proxy | DONE (80ad235) |
 | P6 | Tests (unit, Newman, integration tests) | DONE (6919831) |
-| P7 | CI/CD pipelines (PR + non-prod) | IN REVIEW (pipelines written and statically tested; triggers and the first real run pending, D53) |
+| P7 | CI/CD pipelines (PR + non-prod) | DONE (9dfd5fc) for files, scripts and static tests; live acceptance PENDING user action: git remote, Cloud Build GitHub connection and triggers (D53, DEPLOYMENT.md) |
 | P8 | Prod foundation + prod pipeline | TODO |
 | P9 | Documentation + acceptance demo | TODO |
 
