@@ -1,0 +1,341 @@
+# PROD release pipeline (Cloud Build, project ci-cd-511313), P8.
+# Trigger: manual, with approval (--require-approval), run on a commit that already passed staging.
+# Service account: cb-deploy-prod (set on the trigger, not here). It also needs READ access to the
+# staging deployments and revisions in apigee-nonprod-511322 (find, check and export the revision).
+# Run it only from the trigger: with `gcloud builds submit` SHORT_SHA is empty and guard-target
+# refuses before any cloud call.
+#
+# Promotion is byte-for-byte (cicd-workspace pattern): the proxy revision that is READY in
+# staging is exported and imported into the prod org unchanged. Nothing is stamped, built or
+# packaged here (no stamp-commit, no Maven).
+#
+# Order (PLAN P8 Task B):
+#   guard (substitutions pinned, SHORT_SHA/COMMIT_SHA present) -> npm ci, token, integrationcli
+#   1. find the READY staging revision (fail-closed getter + READY state)
+#   2. its stamped description must name this build's commit (scripts/check-release-commit.sh)
+#      -- nothing in prod has been changed before this point --
+#   3. record the previous prod proxy revision and prod integration version (fail closed)
+#   4. db/load.sh prod (expand-only migrations + seed of kpis_prod, rule 9; never rolled back)
+#   5. integration: apply-integration-prod, assert-integration-prod (re-records the new ACTIVE
+#      version), check-int-prod (on failure: roll back the integration only, exit 1)
+#   6. proxy: fresh token, copy-revision staging -> prod, versioned prod KVMs with the SAME commit
+#      suffix, debug mask, deploy-revision with sa-kpi-proxy-runtime@apigee-prod-511508, wait,
+#      runtime-SA check
+#   7. smoke: scripts/run-newman-prod.sh ("Happy paths" only)
+#   8. check-prod: on failure roll back the PROXY, THEN the INTEGRATION, and exit 1
+#   9. summary
+# Failure pattern (P7 lessons I-1, D54): from apply-int-prod on, no step fails the build itself.
+# Integration steps write /workspace/int_prod_failed (check-int-prod); every later step writes
+# /workspace/prod_failed and skips when it already exists, so check-prod always rolls back what is
+# live. /workspace/prod_proxy_touched marks that a prod deployment was requested: without it the
+# proxy needs no rollback. Only steps before the integration apply (all read-only, plus the
+# expand-only db load) fail hard.
+# Every step passes BUILD_ID and TARGET=prod explicitly (scripts/lib/prod-guard.sh, infra/lib/guard.sh).
+# Shell variables and command substitutions are written $$VAR / $$(...) (Cloud Build escaping).
+
+steps:
+  # ---------------------------------------------------------------- guard (no cloud call)
+  - id: guard-target
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        refuse() { echo "REFUSED: $$*" >&2; exit 1; }
+        [ "${_TARGET}" = "prod" ] || refuse "_TARGET must be prod (got '${_TARGET}')."
+        [ "${_SOURCE_ORG}" = "apigee-nonprod-511322" ] || refuse "_SOURCE_ORG must be apigee-nonprod-511322 (got '${_SOURCE_ORG}')."
+        [ "${_SOURCE_ENV}" = "staging" ] || refuse "_SOURCE_ENV must be staging (got '${_SOURCE_ENV}')."
+        [ "${_TARGET_ORG}" = "apigee-prod-511508" ] || refuse "_TARGET_ORG must be apigee-prod-511508 (got '${_TARGET_ORG}')."
+        [ "${_TARGET_ENV}" = "prod" ] || refuse "_TARGET_ENV must be prod (got '${_TARGET_ENV}')."
+        [ "${_PROXY}" = "sar-mot-kpis-v1" ] || refuse "_PROXY must be sar-mot-kpis-v1 (got '${_PROXY}')."
+        [ "${_REGION}" = "us-central1" ] || refuse "_REGION must be us-central1 (got '${_REGION}')."
+        [[ "${SHORT_SHA}" =~ ^[0-9a-f]{7,40}$$ ]] || refuse "SHORT_SHA is empty or invalid: run this pipeline from its trigger, not gcloud builds submit."
+        [[ "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$$ ]] || refuse "COMMIT_SHA is empty or invalid."
+        case "${COMMIT_SHA}" in "${SHORT_SHA}"*) ;; *) refuse "COMMIT_SHA does not start with SHORT_SHA." ;; esac
+        echo "Promoting commit ${COMMIT_SHA} (${SHORT_SHA}): ${_SOURCE_ORG}/${_SOURCE_ENV} -> ${_TARGET_ORG}/${_TARGET_ENV}, proxy ${_PROXY}, build ${BUILD_ID}"
+
+  # ---------------------------------------------------------------- tools + token
+  # node_modules for the Newman smoke step (newman is a devDependency).
+  - id: install
+    name: node:22
+    entrypoint: npm
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args: ['ci']
+
+  # Short-lived token for steps whose image has no gcloud (node:22); never printed.
+  - id: token
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args: ['-c', 'gcloud auth print-access-token > /workspace/.token']
+
+  - id: install-integrationcli
+    name: node:22
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args: ['scripts/install-integrationcli.sh', '0.86.0', '/workspace/bin']
+
+  # ---------------------------------------------------------------- source checks (read-only)
+  # Fails closed: a read error, no deployment, or a deployment that is not READY stops the build.
+  - id: find-staging-revision
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        bash scripts/get-deployed-revision.sh ${_SOURCE_ORG} ${_SOURCE_ENV} ${_PROXY} source_revision.txt || { echo "Could not read the ${_SOURCE_ENV} deployment of ${_PROXY}." >&2; exit 1; }
+        REV="$$(cat source_revision.txt)"
+        [[ "$$REV" =~ ^[0-9]+$$ ]] || { echo "No revision of ${_PROXY} is deployed in ${_SOURCE_ENV}: nothing to promote." >&2; exit 1; }
+        bash scripts/wait-for-deployment.sh ${_SOURCE_ORG} ${_SOURCE_ENV} ${_PROXY} 60 "$$REV" || { echo "${_PROXY} revision $$REV is not READY in ${_SOURCE_ENV}." >&2; exit 1; }
+        echo "Source: ${_SOURCE_ORG}/${_SOURCE_ENV} ${_PROXY} revision $$REV (READY)."
+
+  # The stamp (scripts/stamp-commit.sh) must name THIS build's commit; otherwise stop before
+  # anything in prod is changed.
+  - id: check-commit
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        bash scripts/check-release-commit.sh ${_SOURCE_ORG} ${_PROXY} "$$(cat source_revision.txt)" ${SHORT_SHA} ${COMMIT_SHA} > source_description.txt || { echo "The ${_SOURCE_ENV} revision is not commit ${SHORT_SHA}: prod was not touched." >&2; exit 1; }
+        echo "Staging revision $$(cat source_revision.txt) is commit ${SHORT_SHA}: $$(cat source_description.txt)"
+
+  # ---------------------------------------------------------------- record previous prod state
+  # Fail closed (I-3, I-4): a read error stops the build before anything is changed.
+  - id: record-prev-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args: ['scripts/get-deployed-revision.sh', '${_TARGET_ORG}', '${_TARGET_ENV}', '${_PROXY}', 'prev_prod_revision.txt']
+
+  - id: record-prev-int-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args: ['scripts/get-published-integration-version.sh', '${_TARGET_ORG}', '${_REGION}', 'sar-kpi-get-prod', 'prev_int_prod.txt']
+
+  # ---------------------------------------------------------------- database (expand-only)
+  # First prod change. Never rolled back (rule 9), so a failure here stops the build with the
+  # previous proxy and integration untouched.
+  - id: db-load-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args: ['db/load.sh', 'prod', 'infra/env/prod.env']
+
+  # ---------------------------------------------------------------- integration
+  # Fresh token for the node:22 apply (the db load can take a while).
+  - id: token-int-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        gcloud auth print-access-token > /workspace/.token || { echo "Could not refresh the token before the prod integration!" >&2; touch /workspace/int_prod_failed; }
+
+  - id: apply-int-prod
+    name: node:22
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod', 'SHORT_SHA=${SHORT_SHA}']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/int_prod_failed ]; then echo "Skipped: an earlier prod integration step failed."; exit 0; fi
+        bash scripts/apply-integration-prod.sh ${SHORT_SHA} || { echo "Integration apply failed on prod!" >&2; touch /workspace/int_prod_failed; }
+
+  # Post-apply assertion; on success new_int_prod.txt holds the new ACTIVE version id (re-record).
+  - id: assert-int-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/int_prod_failed ]; then echo "Skipped: an earlier prod integration step failed."; exit 0; fi
+        bash scripts/assert-integration-prod.sh ${SHORT_SHA} new_int_prod.txt || { echo "Integration assertion failed on prod!" >&2; touch /workspace/int_prod_failed; }
+
+  - id: check-int-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/int_prod_failed ]; then
+          echo "Integration apply/assert failed on prod! Rolling back the prod integration..."
+          bash scripts/get-published-integration-version.sh ${_TARGET_ORG} ${_REGION} sar-kpi-get-prod failed_int_prod.txt || true
+          PREV="$$(cat prev_int_prod.txt 2>/dev/null || true)"
+          FAILED="$$(cat failed_int_prod.txt 2>/dev/null || true)"
+          if [ -n "$$FAILED" ] && [ "$$FAILED" = "$$PREV" ]; then
+            echo "No new version is ACTIVE (still $$PREV): nothing to roll back."
+          else
+            bash scripts/rollback-integration.sh ${_TARGET_ORG} ${_REGION} sar-kpi-get-prod "$$PREV" "$$FAILED" || echo "Integration rollback FAILED: manual intervention required." >&2
+            bash scripts/get-published-integration-version.sh ${_TARGET_ORG} ${_REGION} sar-kpi-get-prod int_prod_after_rollback.txt || true
+          fi
+          echo "Pipeline halted: the prod integration failed; the prod proxy was not touched." >&2
+          exit 1
+        fi
+        echo "Prod integration $$(cat new_int_prod.txt) is ACTIVE with label ${SHORT_SHA}."
+
+  # ================================================================ proxy (new integration is live)
+  # From here on every step writes /workspace/prod_failed instead of failing, and skips when it
+  # already exists (I-1): check-prod then rolls back the proxy (if touched) and the integration.
+  - id: token-proxy-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/prod_failed ]; then echo "Skipped: an earlier prod step failed."; exit 0; fi
+        gcloud auth print-access-token > /workspace/.token || { echo "Could not refresh the token before the prod proxy!" >&2; touch /workspace/prod_failed; }
+
+  # Byte-for-byte: export the staging revision, import it into the prod org (no stamp, no build).
+  # Writes bundle.zip, bundle_description.txt, imported_revision.txt.
+  - id: copy-revision-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/prod_failed ]; then echo "Skipped: an earlier prod step failed."; exit 0; fi
+        { bash scripts/copy-revision.sh ${_SOURCE_ORG} "$$(cat source_revision.txt)" ${_TARGET_ORG} ${_PROXY} && cmp -s bundle_description.txt source_description.txt && grep -Eqx '[0-9]+' imported_revision.txt; } || { echo "Copy of the staging revision to prod failed (or its description is not the checked one)!" >&2; touch /workspace/prod_failed; }
+
+  # Same suffix as the bundle's KVM mapIdentifiers: the stamp checked above is ${SHORT_SHA}.
+  - id: create-kvm-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/prod_failed ]; then echo "Skipped: an earlier prod step failed."; exit 0; fi
+        bash scripts/create-versioned-kvm.sh ${_TARGET_ORG} ${_TARGET_ENV} ${SHORT_SHA} || { echo "Creating the versioned prod KVMs failed!" >&2; touch /workspace/prod_failed; }
+
+  - id: debugmask-prod
+    name: node:22
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/prod_failed ]; then echo "Skipped: an earlier prod step failed."; exit 0; fi
+        bash scripts/deploy-debugmask-prod.sh || { echo "Deploying the prod debug mask failed!" >&2; touch /workspace/prod_failed; }
+
+  # The imported revision with the prod runtime SA (apigee.googletoken.email equivalent, D16).
+  - id: deploy-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/prod_failed ]; then echo "Skipped: an earlier prod step failed."; exit 0; fi
+        touch /workspace/prod_proxy_touched
+        bash scripts/deploy-revision.sh ${_TARGET_ORG} ${_TARGET_ENV} ${_PROXY} "$$(cat imported_revision.txt)" sa-kpi-proxy-runtime@apigee-prod-511508.iam.gserviceaccount.com || { echo "Deploying to prod failed!" >&2; touch /workspace/prod_failed; }
+
+  # Writes prod_revision.txt; waits for exactly the imported revision.
+  - id: wait-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/prod_failed ]; then echo "Skipped: an earlier prod step failed."; exit 0; fi
+        bash scripts/wait-for-deployment.sh ${_TARGET_ORG} ${_TARGET_ENV} ${_PROXY} 600 "$$(cat imported_revision.txt)" || { echo "Prod deployment did not become READY!" >&2; touch /workspace/prod_failed; }
+
+  - id: verify-sa-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/prod_failed ]; then echo "Skipped: an earlier prod step failed."; exit 0; fi
+        bash scripts/assert-proxy-runtime-sa.sh ${_TARGET_ORG} ${_TARGET_ENV} ${_PROXY} "$$(cat prod_revision.txt)" || { echo "Prod runtime service account check failed!" >&2; touch /workspace/prod_failed; }
+
+  # ================================================================ smoke
+  # Fresh token: run-newman-prod.sh reads the smoke-app secrets over REST with it (node:22).
+  - id: token-smoke-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/prod_failed ]; then echo "Skipped: an earlier prod step failed."; exit 0; fi
+        gcloud auth print-access-token > /workspace/.token || { echo "Could not refresh the token before the prod smoke test!" >&2; touch /workspace/prod_failed; }
+
+  # Never fails itself: a failure writes the flag and check-prod rolls back.
+  - id: smoke-prod
+    name: node:22
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/prod_failed ]; then echo "Skipped: an earlier prod step failed."; exit 0; fi
+        bash scripts/run-newman-prod.sh || { echo "Prod smoke tests failed!" >&2; touch /workspace/prod_failed; }
+
+  # ================================================================ check + rollback
+  # Proxy first (only if a prod deployment was requested), then the integration. If wait-prod
+  # failed, prod_revision.txt may be missing: the imported revision is the failed one.
+  - id: check-prod
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        if [ -f /workspace/prod_failed ]; then
+          echo "Prod promotion failed after the new integration went live! Rolling back the prod proxy, then the prod integration..."
+          if [ -f /workspace/prod_proxy_touched ]; then
+            FAILED_REV="$$(cat prod_revision.txt 2>/dev/null || true)"
+            if [ -z "$$FAILED_REV" ]; then FAILED_REV="$$(cat imported_revision.txt 2>/dev/null || true)"; fi
+            if [ -z "$$FAILED_REV" ]; then FAILED_REV="$$(bash scripts/get-deployed-revision.sh ${_TARGET_ORG} ${_TARGET_ENV} ${_PROXY} || true)"; fi
+            bash scripts/rollback.sh ${_TARGET_ORG} ${_TARGET_ENV} ${_PROXY} "$$(cat prev_prod_revision.txt)" "$$FAILED_REV" || echo "Proxy rollback FAILED: manual intervention required." >&2
+          else
+            echo "No prod deployment was requested: the prod proxy is unchanged and needs no rollback."
+          fi
+          bash scripts/rollback-integration.sh ${_TARGET_ORG} ${_REGION} sar-kpi-get-prod "$$(cat prev_int_prod.txt)" "$$(cat new_int_prod.txt)" || echo "Integration rollback FAILED: manual intervention required." >&2
+          # The restored integration version gets a new id (D29).
+          bash scripts/get-published-integration-version.sh ${_TARGET_ORG} ${_REGION} sar-kpi-get-prod int_prod_after_rollback.txt || true
+          echo "Pipeline halted: prod failed and was rolled back (kpis_prod keeps the expand-only DB changes, rule 9)." >&2
+          exit 1
+        fi
+        echo "Prod proxy promoted, verified and smoke-tested."
+
+  # ================================================================ summary
+  - id: summary
+    name: node:22
+    entrypoint: bash
+    env: ['BUILD_ID=${BUILD_ID}', 'TARGET=prod']
+    args:
+      - -c
+      - |
+        echo "commit:            ${COMMIT_SHA}"
+        echo "build:             ${BUILD_ID}"
+        echo "kvm version/label: ${SHORT_SHA}"
+        echo "source:            ${_SOURCE_ORG}/${_SOURCE_ENV} ${_PROXY} revision $$(cat source_revision.txt) ($$(cat source_description.txt))"
+        echo "prod integration:  sar-kpi-get-prod $$(cat new_int_prod.txt) (before: $$(cat prev_int_prod.txt))"
+        echo "prod revision:     ${_PROXY} $$(cat prod_revision.txt) (before: $$(cat prev_prod_revision.txt))"
+
+substitutions:
+  _SOURCE_ORG: apigee-nonprod-511322
+  _SOURCE_ENV: staging
+  _TARGET_ORG: apigee-prod-511508
+  _TARGET_ENV: prod
+  _PROXY: sar-mot-kpis-v1
+  _REGION: us-central1
+  _TARGET: prod
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 5400s
