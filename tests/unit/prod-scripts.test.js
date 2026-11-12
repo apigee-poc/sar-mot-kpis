@@ -409,6 +409,111 @@ describe('P8 prod guards and prod scripts', function () {
           'sar-mot-poc-other-app-api-secret']);
     });
 
+    // infra/03 (P8 final review H1): the "secret already has a version" check must use
+    // value(name.basename()). The fake gcloud answers per --format exactly like the real one:
+    // value(name) is the FULL resource name, value(name.basename()) the bare version number.
+    // FAKE_HAS_VERSION=0: no enabled version and no DB user yet; FAKE_LIST_RC: exit code of the list.
+    function infra03Gcloud() {
+      const dir = tmpDir('p8-i03-');
+      shim(dir, 'gcloud', [
+        'echo "gcloud $*" >> "${0%/*}/calls"',
+        'case "$*" in *"--data-file=-"*|*"--password=-"*) cat > /dev/null;; esac',
+        'case "$*" in',
+        '  "secrets versions list"*)',
+        '    [ "${FAKE_LIST_RC:-0}" = 0 ] || { echo "ERROR: (gcloud) PERMISSION_DENIED" >&2; exit "${FAKE_LIST_RC}"; }',
+        '    [ "${FAKE_HAS_VERSION:-1}" = 1 ] || exit 0',
+        '    case "$*" in',
+        '      *"value(name.basename())"*) echo 1;;',
+        '      *"value(name)"*) echo "projects/123456/secrets/sar-kpi-db-reader-password/versions/1";;',
+        '    esac;;',
+        '  "sql users list"*) [ "${FAKE_HAS_VERSION:-1}" = 1 ] && echo kpi_reader;;',
+        '  "sql instances describe"*serviceAccountEmailAddress*) echo p123456-abc@gcp-sa-cloud-sql.iam.gserviceaccount.com;;',
+        '  "sql instances describe"*pscServiceAttachmentLink*) echo projects/t-tp/regions/us-central1/serviceAttachments/a;;',
+        'esac',
+        'exit 0'
+      ].join('\n'));
+      shim(dir, 'openssl', 'echo "FAKEpw0123456789abcdefABCDEF"');
+      return dir;
+    }
+    const rotations = (calls) => calls.filter((c) => /secrets versions add|sql users set-password|sql users create/.test(c));
+
+    [['nonprod.env', nonprodEnv, {}], ['prod.env', prodEnv, CB]].forEach(([label, envFile, env]) => {
+      it(`infra/03 (${label}): a re-run with an existing secret version does NOT rotate the DB password`, () => {
+        const bin = infra03Gcloud();
+        const r = run(path.join(INFRA, '03-cloudsql-private.sh'), [envFile], { fakebin: bin, env });
+        expect(r.code, r.err).to.equal(0);
+        const calls = callsOf(bin);
+        const list = calls.filter((c) => c.startsWith('gcloud secrets versions list'));
+        expect(list).to.have.length(1);
+        expect(list[0]).to.include('--format=value(name.basename())');
+        expect(list[0]).to.include('--limit=1');
+        expect(rotations(calls)).to.deep.equal([]);
+        expect(r.out).to.match(/already has an active version; preserving existing credentials/);
+      });
+
+      it(`infra/03 (${label}): the first run adds version 1 and creates the user, without printing the password`, () => {
+        const bin = infra03Gcloud();
+        const r = run(path.join(INFRA, '03-cloudsql-private.sh'), [envFile], {
+          fakebin: bin, env: Object.assign({}, env, { FAKE_HAS_VERSION: '0' })
+        });
+        expect(r.code, r.err).to.equal(0);
+        const rot = rotations(callsOf(bin));
+        expect(rot.some((c) => c.startsWith('gcloud secrets versions add sar-kpi-db-reader-password'))).to.equal(true);
+        expect(rot.some((c) => c.startsWith('gcloud sql users create kpi_reader'))).to.equal(true);
+        expect(rot.some((c) => c.includes('set-password'))).to.equal(false);
+        expect(`${r.out}\n${r.err}\n${callsOf(bin).join('\n')}`).to.not.match(/FAKEpw|0123456789abcdef/);
+      });
+
+      it(`infra/03 (${label}): a failed version list stops the script (fail closed, no rotation)`, () => {
+        const bin = infra03Gcloud();
+        const r = run(path.join(INFRA, '03-cloudsql-private.sh'), [envFile], {
+          fakebin: bin, env: Object.assign({}, env, { FAKE_LIST_RC: '1' })
+        });
+        expect(r.code).to.equal(1);
+        expect(r.err).to.match(/could not list the versions of secret sar-kpi-db-reader-password; the password is NOT rotated/);
+        expect(rotations(callsOf(bin))).to.deep.equal([]);
+      });
+    });
+
+    // infra/06 (P8 final review M6): a placeholder MOT developer email is refused before any call.
+    describe('infra/06 placeholder MOT developer email', () => {
+      const i06 = path.join(INFRA, '06-apigee-prod-product-app.sh');
+
+      it('refuses the default placeholder mot-poc@example.com (exit 1, no tool call)', () => {
+        const bin = markerBin();
+        const r = run(i06, [prodEnv], { fakebin: bin, env: CB });
+        expect(r.code).to.equal(1);
+        expect(r.err).to.match(/MOT_DEVELOPER_EMAIL is the placeholder 'mot-poc@example\.com'/);
+        expect(r.err).to.match(/ALLOW_PLACEHOLDER_MOT_EMAIL=1/);
+        expect(called(bin)).to.equal(false);
+      });
+
+      it('refuses any @example.com address, case-insensitively', () => {
+        const bin = markerBin();
+        const r = run(i06, [prodEnv], { fakebin: bin, env: Object.assign({}, CB, { MOT_DEVELOPER_EMAIL: 'Someone@Example.COM' }) });
+        expect(r.code).to.equal(1);
+        expect(r.err).to.match(/placeholder 'Someone@Example\.COM'/);
+        expect(called(bin)).to.equal(false);
+      });
+
+      it('ALLOW_PLACEHOLDER_MOT_EMAIL=1 lets the placeholder through with a warning', () => {
+        const bin = markerBin();
+        const r = run(i06, [prodEnv], { fakebin: bin, env: Object.assign({}, CB, { ALLOW_PLACEHOLDER_MOT_EMAIL: '1' }) });
+        expect(r.err).to.match(/WARNING: MOT_DEVELOPER_EMAIL is the placeholder/);
+        expect(r.err).to.not.match(/Commit the real MOT developer/);
+        // Past the email check: it now fails on the (marker) tools instead.
+        expect(r.code).to.not.equal(0);
+        expect(called(bin)).to.equal(true);
+      });
+
+      it('a real email passes the check without a warning', () => {
+        const bin = markerBin();
+        const r = run(i06, [prodEnv], { fakebin: bin, env: Object.assign({}, CB, { MOT_DEVELOPER_EMAIL: 'kpi.contact@mot.gov.sa' }) });
+        expect(r.err).to.not.match(/placeholder/);
+        expect(called(bin)).to.equal(true);
+      });
+    });
+
     it('db/load.sh prod refuses outside Cloud Build, and a mismatched env/env file', () => {
       const load = path.join(ROOT, 'db', 'load.sh');
       [

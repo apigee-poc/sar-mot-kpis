@@ -296,12 +296,24 @@ describe('P8 prod pipelines (static + fake tools)', function () {
         skipOrFail(this, 'no bash was found');
       }
       const ws = tmpDir('p8b-ws-');
+      const TRIG = 'sar-mot-kpis-infra-prod';
       ['nonprod', 'staging', 'dev', '', 'PROD'].forEach((t) => {
-        const r = runStep(doc.steps[0], { _TARGET: t, BUILD_ID: 'b-1' }, ROOT, ws);
+        const r = runStep(doc.steps[0], { _TARGET: t, BUILD_ID: 'b-1', TRIGGER_NAME: TRIG }, ROOT, ws);
         expect(r.code, t).to.equal(1);
         expect(r.err, t).to.match(/runs the PROD foundation only/);
       });
-      expect(runStep(doc.steps[0], { _TARGET: 'prod', BUILD_ID: 'b-1' }, ROOT, ws).code).to.equal(0);
+      // TRIGGER_NAME pin (mistake-proofing only, D67): empty under a plain builds submit.
+      ['', 'sar-mot-kpis-prod', 'sar-mot-kpis-infra'].forEach((t) => {
+        const r = runStep(doc.steps[0], { _TARGET: 'prod', BUILD_ID: 'b-1', TRIGGER_NAME: t }, ROOT, ws);
+        expect(r.code, t).to.equal(1);
+        expect(r.err, t).to.match(/Refusing TRIGGER_NAME=/);
+      });
+      const ok = runStep(doc.steps[0], { _TARGET: 'prod', BUILD_ID: 'b-1', TRIGGER_NAME: TRIG }, ROOT, ws);
+      expect(ok.code, ok.err).to.equal(0);
+      // L6: only the key names of prod.env reach the log, never a value such as the MOT email.
+      expect(ok.out).to.match(/prod\.env keys: .*MOT_DEVELOPER_EMAIL/);
+      expect(ok.out).to.not.match(/@|kpis_prod|sar-kpi-sql-prod/);
+      expect(fs.readFileSync(path.join(ROOT, 'cloudbuild-infra-prod.yaml'), 'utf8')).to.not.match(/cat infra\/env\/prod\.env/);
     });
 
     it('infra/02 exit 3 is reported, later steps still run, and the final check fails; other codes fail at once', function () {
@@ -343,7 +355,8 @@ describe('P8 prod pipelines (static + fake tools)', function () {
       _SOURCE_ORG: NONPROD, _SOURCE_ENV: 'staging', _TARGET_ORG: PROD, _TARGET_ENV: 'prod',
       _PROXY: 'sar-mot-kpis-v1', _REGION: 'us-central1', _TARGET: 'prod'
     };
-    const RUN_SUBS = Object.assign({}, SUBS, { SHORT_SHA: SHA, COMMIT_SHA: COMMIT, BUILD_ID: 'b-1' });
+    const RUN_SUBS = Object.assign({}, SUBS, { SHORT_SHA: SHA, COMMIT_SHA: COMMIT, BUILD_ID: 'b-1',
+      TRIGGER_NAME: 'sar-mot-kpis-prod' });
     // Steps that change something in prod (the first one is the db load).
     const MUTATIONS = ['db-load-prod', 'apply-int-prod', 'copy-revision-prod', 'create-kvm-prod',
       'debugmask-prod', 'deploy-prod'];
@@ -367,6 +380,12 @@ describe('P8 prod pipelines (static + fake tools)', function () {
         const r = g({ [k]: v });
         expect(r.code, k).to.equal(1);
         expect(r.err, k).to.include(`REFUSED: ${k} must be`);
+      });
+      // TRIGGER_NAME pin (mistake-proofing only, D67): empty under a plain builds submit.
+      ['', 'sar-mot-kpis-main', 'sar-mot-kpis-infra-prod'].forEach((t) => {
+        const r = g({ TRIGGER_NAME: t });
+        expect(r.code, t).to.equal(1);
+        expect(r.err, t).to.include('REFUSED: TRIGGER_NAME must be sar-mot-kpis-prod');
       });
       expect(g({ SHORT_SHA: '' }).code).to.equal(1);
       expect(g({ SHORT_SHA: '' }).err).to.match(/run this pipeline from its trigger/);
@@ -462,6 +481,8 @@ describe('P8 prod pipelines (static + fake tools)', function () {
       const copy = stepText(step('copy-revision-prod'));
       expect(copy).to.include('bash scripts/copy-revision.sh ${_SOURCE_ORG} "$$(cat source_revision.txt)" ${_TARGET_ORG} ${_PROXY}');
       expect(copy).to.include('cmp -s bundle_description.txt source_description.txt');
+      // M3: the IMPORTED prod revision is read back from the prod org and compared.
+      expect(copy).to.include('bash scripts/check-release-commit.sh ${_TARGET_ORG} ${_PROXY} "$$(cat imported_revision.txt)" ${SHORT_SHA} ${COMMIT_SHA} > imported_description.txt && cmp -s imported_description.txt source_description.txt;');
       const all = fileText(doc);
       expect(all).to.not.match(/stamp-commit|mvn |maven|action=import|-Pprod|-Pdev|npm run lint|apiproxies\//);
       expect(all.match(/scripts\/copy-revision\.sh/g)).to.have.length(1);
@@ -613,6 +634,49 @@ describe('P8 prod pipelines (static + fake tools)', function () {
       });
       expect(calls(repo)).to.deep.equal([]);
       expect(fs.existsSync(path.join(ws, 'prod_proxy_touched'))).to.equal(false);
+    });
+
+    it('copy-revision-prod reads the IMPORTED prod revision back and flags a description mismatch (M3)', function () {
+      if (!BASH) {
+        skipOrFail(this, 'no bash was found');
+      }
+      const DESC = `sar-mot-kpis-v1 | commit ${SHA} | build b-9\n`;
+      [
+        { importedDesc: DESC, checkRc: 0, flag: false },
+        { importedDesc: `sar-mot-kpis-v1 | commit ${SHA} | build other\n`, checkRc: 0, flag: true },
+        { importedDesc: '', checkRc: 1, flag: true }
+      ].forEach((c) => {
+        const repo = fakeRepo(['scripts/copy-revision.sh', 'scripts/check-release-commit.sh']);
+        const ws = tmpDir('p8b-ws-');
+        // What the real copy-revision.sh leaves behind (cwd = repo).
+        fs.writeFileSync(path.join(repo, 'source_revision.txt'), '7\n');
+        fs.writeFileSync(path.join(repo, 'source_description.txt'), DESC);
+        fs.writeFileSync(path.join(repo, 'bundle_description.txt'), DESC);
+        fs.writeFileSync(path.join(repo, 'imported_revision.txt'), '3\n');
+        fs.writeFileSync(path.join(repo, 'out_check-release-commit.sh'), c.importedDesc);
+        fs.writeFileSync(path.join(repo, 'rc_check-release-commit.sh'), String(c.checkRc));
+        const r = runStep(step('copy-revision-prod'), RUN_SUBS, repo, ws);
+        expect(r.code, JSON.stringify(c)).to.equal(0);
+        expect(calls(repo)).to.deep.equal([
+          `copy-revision.sh ${NONPROD} 7 ${PROD} sar-mot-kpis-v1`,
+          `check-release-commit.sh ${PROD} sar-mot-kpis-v1 3 ${SHA} ${COMMIT}`]);
+        expect(fs.existsSync(path.join(ws, 'prod_failed')), JSON.stringify(c)).to.equal(c.flag);
+      });
+    });
+
+    it('check-int-prod says "state unknown" when the post-failure version read fails (L1)', function () {
+      if (!BASH) {
+        skipOrFail(this, 'no bash was found');
+      }
+      const repo = fakeRepo(['scripts/get-published-integration-version.sh', 'scripts/rollback-integration.sh']);
+      fs.writeFileSync(path.join(repo, 'rc_get-published-integration-version.sh'), '1');
+      fs.writeFileSync(path.join(repo, 'prev_int_prod.txt'), '\n');
+      const ws = tmpDir('p8b-ws-');
+      fs.writeFileSync(path.join(ws, 'int_prod_failed'), '');
+      const r = runStep(step('check-int-prod'), RUN_SUBS, repo, ws);
+      expect(r.code).to.equal(1);
+      expect(r.err).to.match(/state is UNKNOWN\. Manual intervention required/);
+      expect(r.out).to.match(/Recorded: prev_int_prod=\[\]/);
     });
 
     it('a failing smoke run writes the flag and the step itself passes', function () {

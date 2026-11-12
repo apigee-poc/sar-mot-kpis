@@ -210,7 +210,8 @@ fi
 # NOT_FOUND means "not created yet"; any other describe error (e.g. 403) is reported as such and
 # marks the run INCOMPLETE (M-5).
 # PROD ONLY (IS_PROD=1): the list is NEWMAN_SECRETS from prod.env (the two smoke-app secrets;
-# the MOT handover app's secrets are never readable by the build SA; infra/06 creates them).
+# the MOT handover app's secrets get no direct grant; infra/06 creates them. The build SA can still
+# read them through roles/apigee.developerAdmin or roles/secretmanager.admin while it holds those, D67).
 # Non-prod: always the four non-prod secrets below (NEWMAN_SECRETS is ignored).
 NEWMAN_SECRET_LIST=(sar-mot-poc-app-api-key sar-mot-poc-app-api-secret \
                     sar-mot-poc-other-app-api-key sar-mot-poc-other-app-api-secret)

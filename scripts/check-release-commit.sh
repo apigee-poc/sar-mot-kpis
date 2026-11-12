@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Checks, read-only and BEFORE any prod change (P8, cloudbuild-prod.yaml), that a proxy revision
-# carries the commit stamp of the build that wants to promote it.
+# Checks, read-only (P8, cloudbuild-prod.yaml), that a proxy revision carries the commit stamp of
+# the build that wants to promote it. Used twice: on the READY staging revision BEFORE any prod
+# change (check-commit), and on the revision just imported into the prod org (copy-revision-prod,
+# D67), whose description must then equal the staging one.
 #
 #   check-release-commit.sh <org> <proxy> <revision> <short_sha> <commit_sha>
 #
-#   org         the SOURCE org (staging lives in apigee-nonprod-511322)
-#   revision    a number (the READY staging revision)
+#   org         the SOURCE org (staging lives in apigee-nonprod-511322), or the target org
+#   revision    a number (the READY staging revision, or the imported one)
 #   short_sha   the build's SHORT_SHA: 7-40 lowercase hex (empty is refused)
 #   commit_sha  the build's COMMIT_SHA: 40 lowercase hex, must start with short_sha
 #

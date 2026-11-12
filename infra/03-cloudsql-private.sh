@@ -81,9 +81,20 @@ if ! gcloud secrets describe "${DB_SECRET_NAME}" --project="${PROJECT_ID}" >/dev
     --quiet
 fi
 
-# Check if secret already has a version
+# Check if secret already has a version. `value(name)` is the full resource name
+# (projects/<n>/secrets/<s>/versions/<v>), so only `name.basename()` yields the bare version number
+# (same check as secret_has_version in infra/06). Before the P8 fix wave the check used
+# `value(name)`, never matched, and every re-run rotated the password while the connections keep
+# their pinned version (P8 final review H1). A list error stops the script (fail closed) instead
+# of being read as "no version", which would rotate the password too.
 HAS_SECRET_VERSION="false"
-if gcloud secrets versions list "${DB_SECRET_NAME}" --project="${PROJECT_ID}" --filter="state:ENABLED" --format='value(name)' | grep -q '^[0-9]'; then
+if ! SECRET_VERSION_OUT="$(gcloud secrets versions list "${DB_SECRET_NAME}" --project="${PROJECT_ID}" \
+    --filter="state:ENABLED" --format='value(name.basename())' --limit=1 --quiet)"; then
+  echo "ERROR: could not list the versions of secret ${DB_SECRET_NAME}; the password is NOT rotated." >&2
+  exit 1
+fi
+SECRET_VERSION_OUT="$(printf '%s' "${SECRET_VERSION_OUT}" | tr -d '\r')"
+if [[ "${SECRET_VERSION_OUT}" =~ ^[0-9]+$ ]]; then
   HAS_SECRET_VERSION="true"
 fi
 

@@ -161,12 +161,38 @@ runs from the Console or Cloud Shell. Agents never run them.
 
 | File | Trigger | Service account | What it does |
 |---|---|---|---|
-| `cloudbuild-infra-prod.yaml` | `sar-mot-kpis-infra-prod`: manual, approval required | `cb-deploy-prod` | guard (`_TARGET=prod`) → integrationcli → `infra/01`, `02` (exit 3 is deferred to the last step), `03` (Cloud SQL, **billable**), `04` (PSC endpoint attachment, **billable**) → `scripts/create-connection.sh prod` → `infra/06` (product and apps) → `check-infra-02` |
-| `cloudbuild-prod.yaml` | `sar-mot-kpis-prod`: manual, approval required | `cb-deploy-prod` | guard (pins all 7 substitutions; needs `SHORT_SHA`/`COMMIT_SHA`) → find the READY staging revision → `check-release-commit.sh` (the stamp must equal this build's commit) → record the previous prod revision and integration → `db/load.sh prod` → integration apply/assert (rolls back only the integration on failure) → `copy-revision` staging → prod (byte for byte; no stamp, no Maven) → versioned prod KVMs (same commit suffix) → debug mask → deploy with `sa-kpi-proxy-runtime@apigee-prod-511508` → wait → runtime-SA check → smoke (`Happy paths`) → `check-prod` (on failure: proxy, then integration) → summary |
+| `cloudbuild-infra-prod.yaml` | `sar-mot-kpis-infra-prod`: manual, approval required | `cb-deploy-prod` | guard (`_TARGET=prod`, `TRIGGER_NAME`) → integrationcli → `infra/01`, `02` (exit 3 is deferred to the last step), `03` (Cloud SQL, **billable**), `04` (PSC endpoint attachment, **billable**) → `scripts/create-connection.sh prod` → `infra/06` (product and apps) → `check-infra-02` |
+| `cloudbuild-prod.yaml` | `sar-mot-kpis-prod`: manual, approval required | `cb-deploy-prod` | guard (pins all 7 substitutions and `TRIGGER_NAME`; needs `SHORT_SHA`/`COMMIT_SHA`) → find the READY staging revision → `check-release-commit.sh` (the stamp must equal this build's commit) → record the previous prod revision and integration → `db/load.sh prod` → integration apply/assert (rolls back only the integration on failure) → `copy-revision` staging → prod (byte for byte; no stamp, no Maven; the imported prod revision is read back and its description compared) → versioned prod KVMs (same commit suffix) → debug mask → deploy with `sa-kpi-proxy-runtime@apigee-prod-511508` → wait → runtime-SA check → smoke (`Happy paths`) → `check-prod` (on failure: proxy, then integration) → summary |
 
 Design and reasons: D59 (guard), D60 (read access to non-prod), D61 (tenant and endpoint IP
 resolved at runtime), D62 (smoke subset), D63 (product, apps, secrets), D64 (commit check), D65 (helper
-scripts are copies), D66 (rollback).
+scripts are copies), D66 (rollback), D67 (final-review fixes and the residual risks below).
+
+**Residual risks accepted for the POC (D67), read before you approve anything:**
+
+- **The prod build SA is powerful.** `cb-deploy-prod` keeps the bootstrap roles of command A
+  (`projectIamAdmin`, `iam.serviceAccountAdmin`, `secretmanager.admin`, `storage.admin`, …) and
+  `roles/apigee.developerAdmin`, and it also runs every release build. `projectIamAdmin` alone lets
+  it grant itself any role. So any commit promoted through `cloudbuild-prod.yaml` runs with these
+  rights. Follow-ups: a separate infra SA (`cb-infra-prod`) for `cloudbuild-infra-prod.yaml`, and a
+  release SA with only `apiAdminV2`, `environmentAdmin`, `integrationAdmin`, `cloudsql` import and the
+  smoke secrets.
+- **It can read the MOT handover credentials.** No direct grant is made on
+  `sar-mot-app-api-key`/`-secret`, but `developerAdmin` (a developer-app GET returns
+  `consumerKey`/`consumerSecret`) and `secretmanager.admin` (includes `versions.access` on every
+  secret) both expose them while `cb-deploy-prod` holds those roles.
+- **Only IAM stops an unapproved prod build.** Approval applies to triggers only. Anyone with
+  `iam.serviceAccountUser` (actAs) on `cb-deploy-prod` plus `cloudbuild.builds.create` on
+  `ci-cd-511313` can `gcloud builds submit --service-account=…cb-deploy-prod…` with any config and no
+  approval. The `TRIGGER_NAME`/`SHORT_SHA` checks in the guards stop a mistaken `builds submit` of
+  the committed files, not a deliberate one: Cloud Build lets the submitter supply `TRIGGER_NAME`,
+  `COMMIT_SHA` and `SHORT_SHA`, and can bring its own config. So the actAs grant for the trigger
+  creator is **temporary** (commands D, E, F).
+- **"Staging passed" is checked by the approver, not the pipeline** (D64(4)). Follow-up: read the
+  build id from the stamp and require that Cloud Build build to be `SUCCESS` for this `COMMIT_SHA`
+  (needs `roles/cloudbuild.builds.viewer` for `cb-deploy-prod` on `ci-cd-511313`).
+- **A timeout, cancel or Cloud Build failure after the integration publish is not rolled back**
+  (see "Rollback behaviour").
 
 ### Prerequisites (👤, before the first prod run)
 
@@ -186,6 +212,13 @@ scripts are copies), D66 (rollback).
    the existing secrets keep the first app's credentials, because a secret that already has a
    version is never overwritten. Decide the D41 question at the same time (see D63): either the
    email is recorded as not sensitive, or the rate identifier is hashed.
+   `infra/06` **refuses** an `@example.com` address such as the placeholder (exit 1, before any
+   call; D67). The refusal happens late in the infra-prod run, after the billable Cloud SQL
+   instance, the endpoint attachment and the connection exist; fix the email and re-run (every
+   script is idempotent, and since the D67 fix `infra/03` no longer rotates the DB password on a
+   re-run). For a throw-away demo only, commit `ALLOW_PLACEHOLDER_MOT_EMAIL="1"` to
+   `infra/env/prod.env`; no pipeline step passes environment variables through, so that is the
+   only way to set it.
 4. **Bootstrap roles for `cb-deploy-prod` on `apigee-prod-511508`.** This is chicken and egg:
    `infra/02` cannot grant `cb-deploy-prod` the roles it needs to run `infra/02` itself. **Required:**
    `roles/serviceusage.serviceUsageAdmin` (infra/01), `roles/iam.serviceAccountAdmin` (create the
@@ -211,11 +244,19 @@ scripts are copies), D66 (rollback).
    consumer keys and secrets.
 7. **Cloud Build access on `ci-cd-511313`.**
    - `cb-deploy-prod` has `roles/logging.logWriter` (both prod pipelines use `CLOUD_LOGGING_ONLY`).
-   - The person who creates the triggers has `roles/iam.serviceAccountUser` on `cb-deploy-prod`.
-   - Every approver has `roles/cloudbuild.builds.approver`.
+   - The person who creates the triggers has `roles/iam.serviceAccountUser` on `cb-deploy-prod`
+     **only while creating them**. Remove it right after (command E, below the trigger commands),
+     then check that nobody else holds actAs on `cb-deploy-prod` (command F). Anyone who keeps it
+     can run an unapproved prod build with `gcloud builds submit` (D67). Alternatively, a prod
+     admin who already must hold actAs creates the triggers.
+   - Every approver has `roles/cloudbuild.builds.approver`. Approvers need **no** actAs.
+   - **VERIFY:** that `gcloud builds triggers run` needs only `cloudbuild.builds.create` (the
+     Cloud Build IAM page maps `triggers.run` to it) and not actAs on the trigger's SA. If a run
+     is refused after command E, grant `serviceAccountUser` to the runner for the run only, then
+     remove it again with command E.
    Command D below.
 
-Commands A–D are **NOT RUN**. A human prod admin (A, B) or non-prod admin (C) runs them in Cloud Shell or the Console.
+Commands A–F are **NOT RUN**. A human prod admin (A, B), non-prod admin (C) or CI/CD admin (D, E, F) runs them in Cloud Shell or the Console. E and F follow the trigger commands below.
 
 ```bash
 PROD=apigee-prod-511508
@@ -248,7 +289,8 @@ gcloud projects add-iam-policy-binding "${NONPROD}" \
   --member="serviceAccount:${CB_PROD}" \
   --role="projects/${NONPROD}/roles/sarKpiPromotionReader" --condition=None --quiet
 
-# D. 👤 Cloud Build project: log writer, trigger creator, approvers
+# D. 👤 Cloud Build project: log writer, trigger creator (TEMPORARY: removed by command E right
+#    after the prod triggers exist), approvers
 gcloud projects add-iam-policy-binding "${CICD}" \
   --member="serviceAccount:${CB_PROD}" --role=roles/logging.logWriter --condition=None --quiet
 gcloud iam service-accounts add-iam-policy-binding "${CB_PROD}" --project="${CICD}" \
@@ -296,22 +338,44 @@ gcloud builds triggers create manual \
   --service-account="projects/${PROJECT}/serviceAccounts/cb-deploy-prod@${PROJECT}.iam.gserviceaccount.com" \
   --require-approval \
   --region="${REGION}" --project="${PROJECT}" --quiet
+
+# E. 👤 Right after 4 and 5: remove the trigger creator's TEMPORARY actAs on cb-deploy-prod
+#    (an IAM removal: a human runs it on purpose; AGENTS.md rule 3)
+gcloud iam service-accounts remove-iam-policy-binding \
+  "cb-deploy-prod@${PROJECT}.iam.gserviceaccount.com" --project="${PROJECT}" \
+  --member="user:<TRIGGER_CREATOR_EMAIL>" --role=roles/iam.serviceAccountUser --quiet
+
+# F. 👤 Who can still act as cb-deploy-prod? Expect NO user/group in serviceAccountUser or
+#    serviceAccountTokenCreator, except prod admins who must hold it (record them). Also check the
+#    project-level grants of those two roles on ci-cd-511313 (they cover every SA there).
+gcloud iam service-accounts get-iam-policy \
+  "cb-deploy-prod@${PROJECT}.iam.gserviceaccount.com" --project="${PROJECT}" \
+  --format="table(bindings.role,bindings.members)"
+gcloud projects get-iam-policy "${PROJECT}" --flatten="bindings[].members" \
+  --filter="bindings.role:(roles/iam.serviceAccountUser OR roles/iam.serviceAccountTokenCreator)" \
+  --format="table(bindings.role,bindings.members)"
 ```
+
+Both guards also pin `TRIGGER_NAME` (`sar-mot-kpis-infra-prod` / `sar-mot-kpis-prod`): a plain
+`gcloud builds submit` of the committed files leaves it empty and is refused before any cloud
+call. That is **mistake-proofing only** (D67): Cloud Build lets a submitter set `TRIGGER_NAME`,
+`COMMIT_SHA` and `SHORT_SHA` with `--substitutions`, or bring its own config. Commands E and F are
+the control.
 
 The flags `--require-approval`, `--repository` (2nd gen, which needs an explicit `--region`),
 `--branch`, `--build-config` and `--service-account` on `triggers create manual`, and `--sha` on
 `triggers run`, were checked against the current gcloud reference (D64). Still VERIFY on the first
-run: that a manual or `--sha` run sets `SHORT_SHA` and `COMMIT_SHA`. If it does not, `guard-target`
+run: that a manual or `--sha` run sets `SHORT_SHA`, `COMMIT_SHA` and `TRIGGER_NAME`. If it does not, `guard-target`
 refuses the run and nothing is touched.
 
 ### Run order
 
-1. Prerequisites 1–7.
+1. Prerequisites 1–7, the two prod triggers, then commands E and F (remove the temporary actAs).
 2. Run `sar-mot-kpis-infra-prod` and approve it (**billable**: Cloud SQL `sar-kpi-sql-prod`
    `db-custom-1-3840` and the PSC endpoint attachment `sar-kpi-sql-prod-ea`):
    `gcloud builds triggers run sar-mot-kpis-infra-prod --branch=main --region=us-central1 --project=ci-cd-511313`.
    Approve it in the Console (Cloud Build → History → the build → **Approve**).
-   - If `check-infra-02` fails (infra/02 exit 3: the Quick setup is missing or something was not readable), fix the cause and run the trigger again. Every script is idempotent.
+   - If `check-infra-02` fails (infra/02 exit 3: the Quick setup is missing or something was not readable), fix the cause and run the trigger again. Every script is idempotent. Since D67, `infra/03` keeps the existing DB password on a re-run (before, every run added a new secret version and changed the password, while `sar-kpi-db-prod` stays pinned to the version it was created with) and stops if it cannot list the secret's versions.
    - `infra/02` runs before `infra/03` creates the DB secret, so the metadata-only `secretmanager.viewer` grant on `sar-kpi-db-reader-password` lands only on a **second** run. The first `create-connection` works without it, because it relies on `secretmanager.admin`. Run the trigger a second time before you remove `secretmanager.admin` from `cb-deploy-prod`.
    - From the build log, note the Connectors tenant project (infra/04), the endpoint attachment IP (`ACCEPTED`), and the connection `sar-kpi-db-prod` (`ACTIVE`).
 3. Confirm the staging build for the commit is green (next section).
@@ -345,6 +409,12 @@ instead: Cloud Build → History, filter by trigger `sar-mot-kpis-main`. Then ch
 `sar-mot-kpis-prod` build: its `COMMIT_SHA` must be the same commit. If they differ, the pipeline
 stops by itself at `check-commit`, before prod is touched.
 
+**Follow-up (D67, review M4):** the stamp already names the staging build (`… | build <id>`).
+`check-release-commit.sh` could GET that Cloud Build build and require `status == SUCCESS` and
+`substitutions.COMMIT_SHA` = this commit, failing closed. It needs
+`roles/cloudbuild.builds.viewer` for `cb-deploy-prod` on `ci-cd-511313`. Until then the approver
+check above is the only control; it would stay as a second control afterwards.
+
 ### Rollback behaviour and manual intervention
 
 - **Before any prod change** (guard, find-staging-revision, check-commit, record-prev-*): a
@@ -360,9 +430,21 @@ stops by itself at `check-commit`, before prod is touched.
 - **First prod run** (nothing deployed before): the previous revision and version are empty, so a
   failure **undeploys** the new proxy revision and **unpublishes** `sar-kpi-get-prod`. Prod then has
   nothing live. This is expected (D66).
-- **Rollback failed** ("Proxy/Integration rollback FAILED: manual intervention required" in the
-  log). The build log holds `prev_prod_revision.txt`, `prod_revision.txt` / `imported_revision.txt`,
-  `prev_int_prod.txt` and `new_int_prod.txt` (printed by the failing step and by `summary`). There is
+- **Build TIMEOUT, CANCELLED, or a Cloud Build failure** (worker, image pull, a step killed for a
+  non-script reason) **after the integration publish.** The rollback lives in `check-int-prod` and
+  `check-prod`; when the build is aborted they never run, so the new integration, and possibly the
+  new proxy revision, stay live **without** smoke verification (D67, review M5). Treat it like a
+  failed rollback (next item): a manual rollback with the recorded values. Follow-up: wrap the long
+  commands (`wait-for-deployment`, Newman, integrationcli) in coreutils `timeout` inside their steps,
+  so a hang sets the flag instead of aborting the build.
+- **Rollback failed** ("Proxy/Integration rollback FAILED: manual intervention required" or
+  "state is UNKNOWN" in the log). The values are in the build log: `check-int-prod` prints
+  `prev_prod_revision`, `prev_int_prod` and `new_int_prod` ("Recorded for rollback") before the
+  proxy phase starts, `copy-revision-prod` prints the imported revision, and the failure branches
+  of `check-int-prod` and `check-prod` print them all again ("Recorded: …"). `summary` does **not**
+  run after a failure. A first-run proxy failure where the deploy itself failed may also log a false
+  "Proxy rollback FAILED" (it tries to undeploy a revision that was never deployed; review L2,
+  noted): check the Console before acting. There is
   **no rollback-only pipeline**, and rule 2 forbids running `scripts/rollback*.sh` against prod from a
   workstation. So a human prod operator acts in the Console:
   - Apigee → Proxies → `sar-mot-kpis-v1` → deploy the previous revision to `prod` with service
@@ -378,12 +460,16 @@ stops by itself at `check-commit`, before prod is touched.
 ### Handing over the MOT credentials (👤, out of band)
 
 `infra/06` stores the `mot-app` key and secret only in prod Secret Manager, as
-`sar-mot-app-api-key` and `sar-mot-app-api-secret`. The build SA **cannot** read them: it can read
-only the two smoke secrets. A person with `roles/secretmanager.secretAccessor` on those two secrets
+`sar-mot-app-api-key` and `sar-mot-app-api-secret`. The build SA gets **no direct grant** on them
+(its only direct `secretAccessor` grants are the two smoke secrets). It **can** still read them
+while it holds `roles/apigee.developerAdmin` (a developer-app GET returns the credentials) or
+`roles/secretmanager.admin` (command A), so any commit promoted through `cloudbuild-prod.yaml` could
+read them (D67). Removing `secretmanager.admin` after the infra runs narrows this; `developerAdmin`
+stays until the release SA is split (follow-up). A person with `roles/secretmanager.secretAccessor` on those two secrets
 reads them in the Console and hands them to MOT through the agreed secure channel, never through git,
 chat, email in clear text or a build log. Record who received them and when, outside this repo. The
 pipeline smoke run uses the separate `mot-smoke-app`. Its secrets
-`sar-mot-smoke-app-api-key` / `-secret` are readable by `cb-deploy-prod` only.
+`sar-mot-smoke-app-api-key` / `-secret` are the only secrets `cb-deploy-prod` is granted directly.
 
 ### First-run VERIFY list (record each result in DECISIONS)
 
@@ -399,30 +485,32 @@ pipeline smoke run uses the separate `mot-smoke-app`. Its secrets
 6. The API product can name `sar-mot-kpis-v1` before its first prod deployment (`infra/06`).
 7. `db-custom-1-3840` / `POSTGRES_15` is accepted with the default edition.
 8. The custom role in command C covers the staging read and the bundle export (`find-staging-revision`, `check-commit`, `copy-revision`).
-9. The Apigee revision GET returns the stamped `description` unchanged, so `check-commit` and the `cmp` after the copy both pass.
+9. The Apigee revision GET returns the stamped `description` unchanged, in staging and for the imported prod revision, so `check-commit` and both `cmp`s in `copy-revision-prod` pass.
 10. A manual or `--sha` trigger run sets `SHORT_SHA` (7 hex, the stamp length) and `COMMIT_SHA`.
 11. `prod.35.201.86.122.nip.io` reaches the **prod** org's `prod` environment. It resolves to the same IP as the dev hostname, so the prod org needs its own env group with this hostname and load-balancer routing. Otherwise the smoke run hits the wrong org and fails (401 or 404), and the release rolls back.
 12. `kpis_prod` holds the same seed as dev and staging after `db/load.sh prod`. The `Happy paths` smoke asserts exact values (D62).
 13. Total build time stays within the 5400 s timeouts: Cloud SQL, PSC and connection creation in infra-prod; DB import and integration tests in the release.
 14. `cmp` exists in `cloud-sdk:slim` (diffutils).
+15. A manual or `--sha` trigger run sets `TRIGGER_NAME` to the trigger's name (both `guard-target`s refuse otherwise), and `gcloud builds triggers run` works for the runner after command E removed the trigger creator's actAs.
 
 ### What YOU must run/approve
 
 <!-- Keep identical to the checklist at the end of the P8 section in docs/PLAN.md. -->
 
 1. 👤 Review and merge `p8-prod` into `main`.
-2. 👤 Decide the real MOT developer email. Edit the `MOT_DEVELOPER_EMAIL` line in `infra/env/prod.env`, then commit (`P8: set MOT developer email`). At the same time, decide D41 (D63): either record that the email is not sensitive, or hash the rate identifier. Hashing is a proxy change, so it goes through dev and staging first.
+2. 👤 Decide the real MOT developer email. Edit the `MOT_DEVELOPER_EMAIL` line in `infra/env/prod.env`, then commit (`P8: set MOT developer email`). At the same time, decide D41 (D63): either record that the email is not sensitive, or hash the rate identifier. Hashing is a proxy change, so it goes through dev and staging first. `infra/06` refuses an `@example.com` email unless `ALLOW_PLACEHOLDER_MOT_EMAIL="1"` is committed on purpose (D67).
 3. 👤 Create the GitHub repository `apigee-poc/sar-mot-kpis`, run `git remote add origin https://github.com/apigee-poc/sar-mot-kpis.git`, and push `main`. Create the Cloud Build GitHub connection and the three P7 triggers ("CI/CD triggers (not created yet)").
 4. 👤 Let `sar-mot-kpis-main` take the merged commit green through dev and staging.
 5. 👤 Console **Quick setup** for Application Integration in `apigee-prod-511508` / `us-central1` (D28).
 6. 👤 Prod admin: run command A, the bootstrap roles for `cb-deploy-prod` on `apigee-prod-511508`.
 7. 👤 Prod admin: run command B and confirm the output is **empty** (`cb-deploy-nonprod` has no role on prod). Also check Policy Analyzer for resource-level bindings.
 8. 👤 Non-prod admin: approve and run command C, the custom read-only role for `cb-deploy-prod` on `apigee-nonprod-511322` (D60, supersedes D55).
-9. 👤 Run command D: `logging.logWriter` for `cb-deploy-prod`, `serviceAccountUser` for the trigger creator, and `cloudbuild.builds.approver` for each approver, all on `ci-cd-511313`.
+9. 👤 Run command D: `logging.logWriter` for `cb-deploy-prod`, a **temporary** `serviceAccountUser` for the trigger creator, and `cloudbuild.builds.approver` for each approver, all on `ci-cd-511313`.
 10. 👤 Create the triggers `sar-mot-kpis-infra-prod` and `sar-mot-kpis-prod` ("Prod triggers (NOT RUN)").
-11. 👤 Run `sar-mot-kpis-infra-prod` and **approve** it (billable). Re-run it until `check-infra-02` passes, and once more before `secretmanager.admin` is ever removed from `cb-deploy-prod` (the DB secret viewer grant). Note the tenant project, the endpoint IP and the connection state.
-12. 👤 Make sure `prod.35.201.86.122.nip.io` routes to the prod org's `prod` environment (VERIFY 11).
-13. 👤 Confirm that the most recent `sar-mot-kpis-main` build is `SUCCESS` for the commit you will promote and that none is running ("Before approving").
-14. 👤 Run `sar-mot-kpis-prod --sha=<that commit>` and **approve** it. Check the `summary` step. On failure, follow "Rollback behaviour and manual intervention".
-15. 👤 Hand the `mot-app` credentials to MOT out of band.
-16. 👤 Report the first-run VERIFY results (DEPLOYMENT.md "First-run VERIFY list") so they can be recorded in DECISIONS. Then mark P8 `DONE`.
+11. 👤 Right after that, run command E (remove the trigger creator's `serviceAccountUser` on `cb-deploy-prod`) and command F (nobody else can act as `cb-deploy-prod`, except prod admins you record). Anyone who keeps actAs can run an unapproved prod build (D67).
+12. 👤 Run `sar-mot-kpis-infra-prod` and **approve** it (billable). Re-run it until `check-infra-02` passes (a re-run keeps the DB password, D67), and once more before `secretmanager.admin` is ever removed from `cb-deploy-prod` (the DB secret viewer grant). Note the tenant project, the endpoint IP and the connection state. Removing `secretmanager.admin` afterwards is recommended (while held, every release build can read every prod secret, D67); grant it again before any later infra-prod run.
+13. 👤 Make sure `prod.35.201.86.122.nip.io` routes to the prod org's `prod` environment (VERIFY 11).
+14. 👤 Confirm that the most recent `sar-mot-kpis-main` build is `SUCCESS` for the commit you will promote and that none is running ("Before approving").
+15. 👤 Run `sar-mot-kpis-prod --sha=<that commit>` and **approve** it. Check the `summary` step. On failure, a timeout or a cancel, follow "Rollback behaviour and manual intervention".
+16. 👤 Hand the `mot-app` credentials to MOT out of band.
+17. 👤 Report the first-run VERIFY results (DEPLOYMENT.md "First-run VERIFY list") so they can be recorded in DECISIONS. Then mark P8 `DONE`.

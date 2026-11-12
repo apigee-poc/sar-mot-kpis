@@ -6,10 +6,13 @@
 # a file.
 #
 #   sar-mot-kpis-product   path /kpis/**, all HTTP methods, env prod, auto-approve
-#   developer              MOT_DEVELOPER_EMAIL (env file / environment; default placeholder
-#                          mot-poc@example.com: REPLACE with the real MOT contact before the run)
+#   developer              MOT_DEVELOPER_EMAIL (infra/env/prod.env; default placeholder
+#                          mot-poc@example.com: REPLACE with the real MOT contact before the run;
+#                          an @example.com address is refused unless ALLOW_PLACEHOLDER_MOT_EMAIL=1)
 #   mot-app                MOT handover app (sar-mot-kpis-product); credentials handed over out of
-#                          band by a person, never readable by the build SA
+#                          band by a person. The build SA gets NO direct grant on them, but while it
+#                          holds roles/apigee.developerAdmin (app GET returns the credentials) or
+#                          roles/secretmanager.admin it can still read them (D67).
 #   developer              SMOKE_DEVELOPER_EMAIL (default sar-mot-smoke@example.com)
 #   mot-smoke-app          pipeline smoke app (sar-mot-kpis-product), used by
 #                          scripts/run-newman-prod.sh
@@ -23,8 +26,8 @@
 # Idempotent: existing product, developers and apps are left as they are (409 / 200 on GET).
 # A secret VERSION is added only when the secret has no enabled version yet.
 # Needs: gcloud, curl, Python 3 (cloud-sdk:slim).
-# Exit: 0 ok; 1 API/gcloud failure; 2 refused by the guard (wrong project, not in Cloud Build,
-#       TARGET is not prod, wrong build SA).
+# Exit: 0 ok; 1 API/gcloud failure, or a placeholder MOT email (before any call); 2 refused by
+#       the guard (wrong project, not in Cloud Build, TARGET is not prod, wrong build SA).
 set -euo pipefail
 # Never trace: shell variables below hold API credentials (guards against `bash -x`).
 set +x
@@ -74,10 +77,24 @@ for e in "${DEVELOPER_EMAIL}" "${SMOKE_DEVELOPER}"; do
     exit 1
   fi
 done
-if [[ "${DEVELOPER_EMAIL}" == "mot-poc@example.com" ]]; then
-  echo "WARNING: MOT_DEVELOPER_EMAIL is the placeholder mot-poc@example.com; replace it with the real" >&2
-  echo "         MOT developer email (infra/env/prod.env or the build env) before the handover." >&2
-fi
+# The MOT developer is effectively permanent: its app's credentials go into secrets that are never
+# overwritten, and its email is the rate identifier (D37, D63). So a placeholder (any
+# @example.com address, including the default mot-poc@example.com) is REFUSED, unless
+# ALLOW_PLACEHOLDER_MOT_EMAIL=1 is set on purpose (a throw-away demo). No pipeline step passes
+# environment variables through, so the opt-in only works when it is committed to
+# infra/env/prod.env (visible in review). Checked before any tool call (P8 final review M6, D67).
+case "${DEVELOPER_EMAIL,,}" in
+  *@example.com)
+    if [[ "${ALLOW_PLACEHOLDER_MOT_EMAIL:-0}" != "1" ]]; then
+      echo "ERROR: MOT_DEVELOPER_EMAIL is the placeholder '${DEVELOPER_EMAIL}'. Commit the real MOT developer" >&2
+      echo "       email to infra/env/prod.env first (DEPLOYMENT.md prerequisite 3), or set" >&2
+      echo "       ALLOW_PLACEHOLDER_MOT_EMAIL=1 there on purpose. Nothing was created by infra/06." >&2
+      exit 1
+    fi
+    echo "WARNING: MOT_DEVELOPER_EMAIL is the placeholder '${DEVELOPER_EMAIL}' (ALLOW_PLACEHOLDER_MOT_EMAIL=1)." >&2
+    echo "         mot-app and its secrets will belong to this placeholder developer for good." >&2
+    ;;
+esac
 
 API="https://apigee.googleapis.com/v1/organizations/${ORG}"
 # PY = first working Python 3 (scripts/lib/python.sh).
@@ -280,7 +297,8 @@ create_app "${DEVELOPER_EMAIL}" "${APP_MOT}" "${PRODUCT_MAIN}" "${SECRET_MOT_KEY
 create_app "${SMOKE_DEVELOPER}" "${APP_SMOKE}" "${PRODUCT_MAIN}" "${SECRET_SMOKE_KEY}" "${SECRET_SMOKE_SECRET}"
 
 # --- Smoke secret access for cloudbuild-prod.yaml -------------------------------------------
-# Only the two smoke secrets; the MOT handover secrets stay unreadable by the build SA.
+# Only the two smoke secrets get a direct grant; the MOT handover secrets get none. (The build SA
+# can still reach them through developerAdmin / secretmanager.admin while it holds those, D67.)
 for secret in "${SECRET_SMOKE_KEY}" "${SECRET_SMOKE_SECRET}"; do
   echo "Granting roles/secretmanager.secretAccessor on secret ${secret} to ${CB_DEPLOY_SA}..."
   gcloud secrets add-iam-policy-binding "${secret}" \

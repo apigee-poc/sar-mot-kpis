@@ -129,7 +129,11 @@ if [[ "${IS_PROD}" == "1" ]]; then
     exit 1
   fi
 fi
-STATE="$(curl -s -H "Authorization: Bearer ${TOKEN}" "${API}" | grep -o '"state": *"[^"]*"' | cut -d'"' -f4 || echo "UNKNOWN")"
+# Non-prod: the legacy read (BASIC view, unchanged output). Prod: STATE is the ACCEPTED state the
+# FULL-view loop above already verified, so it is not re-read in the BASIC view (P8 review L5).
+if [[ "${IS_PROD}" != "1" ]]; then
+  STATE="$(curl -s -H "Authorization: Bearer ${TOKEN}" "${API}" | grep -o '"state": *"[^"]*"' | cut -d'"' -f4 || echo "UNKNOWN")"
+fi
 echo "Endpoint Attachment State: ${STATE}"
 echo "============================================================"
 echo "SUCCESS: Endpoint Attachment ${PSC_ENDPOINT_ATTACHMENT} is ready."

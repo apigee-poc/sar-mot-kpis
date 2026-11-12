@@ -2,8 +2,12 @@
 # Trigger: manual, with approval (--require-approval), run on a commit that already passed staging.
 # Service account: cb-deploy-prod (set on the trigger, not here). It also needs READ access to the
 # staging deployments and revisions in apigee-nonprod-511322 (find, check and export the revision).
-# Run it only from the trigger: with `gcloud builds submit` SHORT_SHA is empty and guard-target
-# refuses before any cloud call.
+# Run it only from the trigger. guard-target requires TRIGGER_NAME=sar-mot-kpis-prod and a valid
+# SHORT_SHA/COMMIT_SHA, so a plain `gcloud builds submit` of this file is refused before any cloud
+# call. This is mistake-proofing ONLY (D67): Cloud Build lets the submitter supply TRIGGER_NAME,
+# COMMIT_SHA and SHORT_SHA with --substitutions, and a submitter can bring any other config file.
+# The control against an unapproved prod build is IAM: nobody but the people who must keeps
+# iam.serviceAccountUser (actAs) on cb-deploy-prod (DEPLOYMENT.md command D/E/F).
 #
 # Promotion is byte-for-byte (cicd-workspace pattern): the proxy revision that is READY in
 # staging is exported and imported into the prod org unchanged. Nothing is stamped, built or
@@ -30,6 +34,12 @@
 # live. /workspace/prod_proxy_touched marks that a prod deployment was requested: without it the
 # proxy needs no rollback. Only steps before the integration apply (all read-only, plus the
 # expand-only db load) fail hard.
+# GAP (P8 final review M5, D67): the rollback lives in check-int-prod / check-prod. If the build
+# hits its 5400 s timeout, is cancelled, or a step dies for a Cloud Build reason (worker, image
+# pull) after the integration publish, those steps never run and the new integration (and maybe
+# the new proxy revision) stays live unverified. That is a MANUAL rollback (DEPLOYMENT.md
+# "Rollback behaviour"); check-int-prod logs the recorded values first. Follow-up: wrap long
+# commands in coreutils `timeout` so a hang sets the flag instead of aborting the build.
 # Every step passes BUILD_ID and TARGET=prod explicitly (scripts/lib/prod-guard.sh, infra/lib/guard.sh).
 # Shell variables and command substitutions are written $$VAR / $$(...) (Cloud Build escaping).
 
@@ -50,6 +60,8 @@ steps:
         [ "${_TARGET_ENV}" = "prod" ] || refuse "_TARGET_ENV must be prod (got '${_TARGET_ENV}')."
         [ "${_PROXY}" = "sar-mot-kpis-v1" ] || refuse "_PROXY must be sar-mot-kpis-v1 (got '${_PROXY}')."
         [ "${_REGION}" = "us-central1" ] || refuse "_REGION must be us-central1 (got '${_REGION}')."
+        # Mistake-proofing, not a security control: TRIGGER_NAME can be supplied by hand (D67).
+        [ "${TRIGGER_NAME}" = "sar-mot-kpis-prod" ] || refuse "TRIGGER_NAME must be sar-mot-kpis-prod (got '${TRIGGER_NAME}'): run this pipeline from its trigger, not gcloud builds submit."
         [[ "${SHORT_SHA}" =~ ^[0-9a-f]{7,40}$$ ]] || refuse "SHORT_SHA is empty or invalid: run this pipeline from its trigger, not gcloud builds submit."
         [[ "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$$ ]] || refuse "COMMIT_SHA is empty or invalid."
         case "${COMMIT_SHA}" in "${SHORT_SHA}"*) ;; *) refuse "COMMIT_SHA does not start with SHORT_SHA." ;; esac
@@ -167,7 +179,10 @@ steps:
       - |
         if [ -f /workspace/int_prod_failed ]; then
           echo "Integration apply/assert failed on prod! Rolling back the prod integration..."
-          bash scripts/get-published-integration-version.sh ${_TARGET_ORG} ${_REGION} sar-kpi-get-prod failed_int_prod.txt || true
+          echo "Recorded: prev_int_prod=[$$(cat prev_int_prod.txt 2>/dev/null || true)] new_int_prod=[$$(cat new_int_prod.txt 2>/dev/null || true)] prev_prod_revision=[$$(cat prev_prod_revision.txt 2>/dev/null || true)]"
+          if ! bash scripts/get-published-integration-version.sh ${_TARGET_ORG} ${_REGION} sar-kpi-get-prod failed_int_prod.txt; then
+            echo "Could not read the ACTIVE sar-kpi-get-prod version after the failure: its state is UNKNOWN. Manual intervention required: check sar-kpi-get-prod in the Console after the rollback below." >&2
+          fi
           PREV="$$(cat prev_int_prod.txt 2>/dev/null || true)"
           FAILED="$$(cat failed_int_prod.txt 2>/dev/null || true)"
           if [ -n "$$FAILED" ] && [ "$$FAILED" = "$$PREV" ]; then
@@ -180,6 +195,9 @@ steps:
           exit 1
         fi
         echo "Prod integration $$(cat new_int_prod.txt) is ACTIVE with label ${SHORT_SHA}."
+        # In the log BEFORE the proxy phase, so a build TIMEOUT/CANCELLED later still leaves the
+        # values a human needs for a manual rollback (P8 final review M5/L3).
+        echo "Recorded for rollback: prev_prod_revision=[$$(cat prev_prod_revision.txt 2>/dev/null || true)] prev_int_prod=[$$(cat prev_int_prod.txt 2>/dev/null || true)] new_int_prod=[$$(cat new_int_prod.txt 2>/dev/null || true)]"
 
   # ================================================================ proxy (new integration is live)
   # From here on every step writes /workspace/prod_failed instead of failing, and skips when it
@@ -195,7 +213,11 @@ steps:
         gcloud auth print-access-token > /workspace/.token || { echo "Could not refresh the token before the prod proxy!" >&2; touch /workspace/prod_failed; }
 
   # Byte-for-byte: export the staging revision, import it into the prod org (no stamp, no build).
-  # Writes bundle.zip, bundle_description.txt, imported_revision.txt.
+  # Writes bundle.zip, bundle_description.txt, imported_revision.txt and imported_description.txt.
+  # Checks, in order: the staging description read during the copy is the checked one (cmp);
+  # the import returned a revision number; the IMPORTED PROD revision, read back from the prod org
+  # with check-release-commit.sh, carries this commit's stamp and the identical description (cmp,
+  # P8 final review M3). The bundle bytes are not hashed: Apigee may re-zip an export (follow-up).
   - id: copy-revision-prod
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
@@ -204,7 +226,7 @@ steps:
       - -c
       - |
         if [ -f /workspace/prod_failed ]; then echo "Skipped: an earlier prod step failed."; exit 0; fi
-        { bash scripts/copy-revision.sh ${_SOURCE_ORG} "$$(cat source_revision.txt)" ${_TARGET_ORG} ${_PROXY} && cmp -s bundle_description.txt source_description.txt && grep -Eqx '[0-9]+' imported_revision.txt; } || { echo "Copy of the staging revision to prod failed (or its description is not the checked one)!" >&2; touch /workspace/prod_failed; }
+        { bash scripts/copy-revision.sh ${_SOURCE_ORG} "$$(cat source_revision.txt)" ${_TARGET_ORG} ${_PROXY} && cmp -s bundle_description.txt source_description.txt && grep -Eqx '[0-9]+' imported_revision.txt && bash scripts/check-release-commit.sh ${_TARGET_ORG} ${_PROXY} "$$(cat imported_revision.txt)" ${SHORT_SHA} ${COMMIT_SHA} > imported_description.txt && cmp -s imported_description.txt source_description.txt; } || { echo "Copy of the staging revision to prod failed (or the staging or imported prod description is not the checked one)!" >&2; touch /workspace/prod_failed; }
 
   # Same suffix as the bundle's KVM mapIdentifiers: the stamp checked above is ${SHORT_SHA}.
   - id: create-kvm-prod
@@ -295,6 +317,7 @@ steps:
       - |
         if [ -f /workspace/prod_failed ]; then
           echo "Prod promotion failed after the new integration went live! Rolling back the prod proxy, then the prod integration..."
+          echo "Recorded: prev_prod_revision=[$$(cat prev_prod_revision.txt 2>/dev/null || true)] prod_revision=[$$(cat prod_revision.txt 2>/dev/null || true)] imported_revision=[$$(cat imported_revision.txt 2>/dev/null || true)] prev_int_prod=[$$(cat prev_int_prod.txt 2>/dev/null || true)] new_int_prod=[$$(cat new_int_prod.txt 2>/dev/null || true)]"
           if [ -f /workspace/prod_proxy_touched ]; then
             FAILED_REV="$$(cat prod_revision.txt 2>/dev/null || true)"
             if [ -z "$$FAILED_REV" ]; then FAILED_REV="$$(cat imported_revision.txt 2>/dev/null || true)"; fi

@@ -16,8 +16,14 @@
 #      the rest (integrationAdmin, connectors.admin, cloudsql.admin, serviceAccountUser, the Apigee
 #      roles). Exact list and commands: docs/DEPLOYMENT.md. cb-deploy-nonprod must hold NO role on
 #      the prod project (D58).
-#   3. Decide MOT_DEVELOPER_EMAIL (infra/env/prod.env) before the first run (infra/06).
+#   3. Decide MOT_DEVELOPER_EMAIL (infra/env/prod.env) before the first run: infra/06 REFUSES an
+#      @example.com placeholder (exit 1, after infra/01-04 and the connection already ran) unless
+#      ALLOW_PLACEHOLDER_MOT_EMAIL="1" is committed to prod.env on purpose (D67).
 #   Approvers need roles/cloudbuild.builds.approver.
+# Least privilege (P8 final review M2, D67): the bootstrap roles (projectIamAdmin,
+# serviceAccountAdmin, secretmanager.admin, storage.admin, ...) stay on cb-deploy-prod, which also
+# runs every release build. That is an accepted POC risk; a separate infra SA (cb-infra-prod) for
+# this pipeline is a listed follow-up. TRIGGER_NAME in guard-target is mistake-proofing only.
 #
 # Order: guard -> install integrationcli -> infra/01 -> 02 -> 03 -> 04 -> create-connection -> 06
 # -> final check. Each script is printed before it runs (they hold no secrets; credentials go to
@@ -41,9 +47,15 @@ steps:
           echo "Refusing _TARGET='${_TARGET}': this pipeline runs the PROD foundation only (infra/env/prod.env); the non-prod foundation is cloudbuild-infra.yaml." >&2
           exit 1
         fi
+        # Mistake-proofing, not a security control: TRIGGER_NAME can be supplied by hand (D67).
+        if [ "${TRIGGER_NAME}" != "sar-mot-kpis-infra-prod" ]; then
+          echo "Refusing TRIGGER_NAME='${TRIGGER_NAME}': run this pipeline from its trigger sar-mot-kpis-infra-prod, not gcloud builds submit." >&2
+          exit 1
+        fi
         test -f infra/env/prod.env || { echo "infra/env/prod.env not found" >&2; exit 1; }
-        echo "Target: ${_TARGET} (infra/env/prod.env), build ${BUILD_ID}"
-        cat infra/env/prod.env
+        echo "Target: ${_TARGET} (infra/env/prod.env), trigger ${TRIGGER_NAME}, build ${BUILD_ID}"
+        # Key names only: the values (MOT_DEVELOPER_EMAIL, D41/D63) stay out of the build log.
+        echo "prod.env keys: $$(grep -oE '^[A-Z_][A-Z0-9_]*=' infra/env/prod.env | tr -d '=' | tr '\n' ' ')"
 
   - id: install-integrationcli
     name: node:22
@@ -94,7 +106,8 @@ steps:
         echo "===== infra/03-cloudsql-private.sh ====="; cat infra/03-cloudsql-private.sh
         bash infra/03-cloudsql-private.sh infra/env/prod.env
 
-  # Uses /workspace/bin/integrationcli (installed above) to resolve the Connectors tenant project.
+  # The Connectors tenant project is resolved by curl (scripts/lib/connectors-tenant.sh, prod only);
+  # /workspace/bin/integrationcli (installed above) runs `endpoints create`.
   - id: infra-04-psc-endpoint-attachment
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
