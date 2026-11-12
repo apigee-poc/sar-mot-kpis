@@ -14,7 +14,7 @@ Agents update the status line of a phase when they start or finish it.
 | P5 | Apigee proxy | DONE (80ad235) |
 | P6 | Tests (unit, Newman, integration tests) | DONE (6919831) |
 | P7 | CI/CD pipelines (PR + non-prod) | DONE (9dfd5fc) for files, scripts and static tests; live acceptance PENDING user action: git remote, Cloud Build GitHub connection and triggers (D53, DEPLOYMENT.md) |
-| P8 | Prod foundation + prod pipeline | IN REVIEW (files; prod run pending): pipelines, scripts, static tests and runbook on branch `p8-prod`; the live prod run is PENDING user action (D59–D66, DEPLOYMENT.md "Prod (P8)") |
+| P8 | Prod foundation + prod pipeline | DONE (files; prod run pending): pipelines, scripts, static tests and runbook on branch `p8-prod`; the live prod run is PENDING user action (D59–D66, DEPLOYMENT.md "Prod (P8)") |
 | P9 | Documentation + acceptance demo | TODO |
 
 ---
@@ -441,7 +441,7 @@ manual or infra run. **Pending (👤):** GitHub remote, Cloud Build connection a
 **Acceptance:** a prod run promotes byte-for-byte what passed staging, and the smoke tests
 pass.
 
-**Status: IN REVIEW (files; prod run pending).** Every file is written and statically tested.
+**Status: DONE (files; prod run pending).** Every file is written and statically tested.
 The acceptance above has **not** been run: per AGENTS.md rule 2, nothing ran against
 `apigee-prod-511508`. The acceptance is met when:
 
