@@ -1,6 +1,6 @@
 # Implementation plan — SAR MOT KPI POC
 
-Status values: `TODO` · `IN PROGRESS` · `BLOCKED (reason)` · `DONE (commit sha)`.
+Status values: `TODO` · `IN PROGRESS` · `IN REVIEW (scope)` · `BLOCKED (reason)` · `DONE (commit sha)`.
 Agents update the status line of a phase when they start or finish it.
 **👤 = human action required** (Console, approvals, or decisions an agent must not take).
 
@@ -14,7 +14,7 @@ Agents update the status line of a phase when they start or finish it.
 | P5 | Apigee proxy | DONE (80ad235) |
 | P6 | Tests (unit, Newman, integration tests) | DONE (6919831) |
 | P7 | CI/CD pipelines (PR + non-prod) | DONE (9dfd5fc) for files, scripts and static tests; live acceptance PENDING user action: git remote, Cloud Build GitHub connection and triggers (D53, DEPLOYMENT.md) |
-| P8 | Prod foundation + prod pipeline | TODO |
+| P8 | Prod foundation + prod pipeline | IN REVIEW (files; prod run pending): pipelines, scripts, static tests and runbook on branch `p8-prod`; the live prod run is PENDING user action (D59–D66, DEPLOYMENT.md "Prod (P8)") |
 | P9 | Documentation + acceptance demo | TODO |
 
 ---
@@ -440,6 +440,52 @@ manual or infra run. **Pending (👤):** GitHub remote, Cloud Build connection a
 
 **Acceptance:** a prod run promotes byte-for-byte what passed staging, and the smoke tests
 pass.
+
+**Status: IN REVIEW (files; prod run pending).** Every file is written and statically tested.
+The acceptance above has **not** been run: per AGENTS.md rule 2, nothing ran against
+`apigee-prod-511508`. The acceptance is met when:
+
+- an approved `sar-mot-kpis-prod` run, at a commit whose most recent `sar-mot-kpis-main` build is
+  green, passes `check-commit`;
+- its `copy-revision` imports the staging bundle with the identical stamped description (`cmp`);
+- the deployed prod revision runs as `sa-kpi-proxy-runtime@apigee-prod-511508`;
+- the `Happy paths` smoke passes against `https://prod.35.201.86.122.nip.io`.
+
+Record the first-run VERIFY results (DEPLOYMENT.md "First-run VERIFY list") in DECISIONS, then mark
+P8 `DONE`.
+
+**Implemented (2026-11-12, offline, branch `p8-prod`):**
+
+- **Task A.** `infra/env/prod.env`, the prod guard `infra/lib/guard.sh` in `infra/01`–`06` and
+  `db/load.sh`, `infra/02`/`04` prod-only steps (on `IS_PROD`), `infra/06-apigee-prod-product-app.sh`,
+  `scripts/create-connection.sh` + `integration/connectors/sar-kpi-db-prod.json`, `integration/prod/**`
+  (tenant placeholder), and the prod helper scripts (`apply-`/`assert-integration-prod`,
+  `deploy-debugmask-prod`, `run-newman-prod`, `lib/prod-guard`, `lib/connectors-tenant`).
+- **Task B.** `cloudbuild-infra-prod.yaml`, `cloudbuild-prod.yaml` and `scripts/check-release-commit.sh`.
+- **Tests.** `tests/unit/prod-scripts.test.js` and `tests/unit/prod-pipelines.test.js`.
+- **Task C.** The runbook (DEPLOYMENT.md "Prod (P8)") and D59–D66.
+
+Step 1 above is a 👤 prerequisite. Steps 2–4 are done as files: step 2 by `cloudbuild-infra-prod.yaml`, step 3 by `cloudbuild-prod.yaml`, step 4 by `infra/06`. Every one of them is pending its first approved run.
+
+**What YOU must run/approve** (identical to DEPLOYMENT.md; commands A–D, the trigger commands and
+the staging-green check are there):
+
+1. 👤 Review and merge `p8-prod` into `main`.
+2. 👤 Decide the real MOT developer email. Edit the `MOT_DEVELOPER_EMAIL` line in `infra/env/prod.env`, then commit (`P8: set MOT developer email`). At the same time, decide D41 (D63): either record that the email is not sensitive, or hash the rate identifier. Hashing is a proxy change, so it goes through dev and staging first.
+3. 👤 Create the GitHub repository `apigee-poc/sar-mot-kpis`, run `git remote add origin https://github.com/apigee-poc/sar-mot-kpis.git`, and push `main`. Create the Cloud Build GitHub connection and the three P7 triggers ("CI/CD triggers (not created yet)").
+4. 👤 Let `sar-mot-kpis-main` take the merged commit green through dev and staging.
+5. 👤 Console **Quick setup** for Application Integration in `apigee-prod-511508` / `us-central1` (D28).
+6. 👤 Prod admin: run command A, the bootstrap roles for `cb-deploy-prod` on `apigee-prod-511508`.
+7. 👤 Prod admin: run command B and confirm the output is **empty** (`cb-deploy-nonprod` has no role on prod). Also check Policy Analyzer for resource-level bindings.
+8. 👤 Non-prod admin: approve and run command C, the custom read-only role for `cb-deploy-prod` on `apigee-nonprod-511322` (D60, supersedes D55).
+9. 👤 Run command D: `logging.logWriter` for `cb-deploy-prod`, `serviceAccountUser` for the trigger creator, and `cloudbuild.builds.approver` for each approver, all on `ci-cd-511313`.
+10. 👤 Create the triggers `sar-mot-kpis-infra-prod` and `sar-mot-kpis-prod` ("Prod triggers (NOT RUN)").
+11. 👤 Run `sar-mot-kpis-infra-prod` and **approve** it (billable). Re-run it until `check-infra-02` passes, and once more before `secretmanager.admin` is ever removed from `cb-deploy-prod` (the DB secret viewer grant). Note the tenant project, the endpoint IP and the connection state.
+12. 👤 Make sure `prod.35.201.86.122.nip.io` routes to the prod org's `prod` environment (VERIFY 11).
+13. 👤 Confirm that the most recent `sar-mot-kpis-main` build is `SUCCESS` for the commit you will promote and that none is running ("Before approving").
+14. 👤 Run `sar-mot-kpis-prod --sha=<that commit>` and **approve** it. Check the `summary` step. On failure, follow "Rollback behaviour and manual intervention".
+15. 👤 Hand the `mot-app` credentials to MOT out of band.
+16. 👤 Report the first-run VERIFY results (DEPLOYMENT.md "First-run VERIFY list") so they can be recorded in DECISIONS. Then mark P8 `DONE`.
 
 ---
 
