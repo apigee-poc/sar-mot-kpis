@@ -1,0 +1,29 @@
+{
+  "trigger_overrides": [
+    {
+      "triggerNumber": "1",
+      "triggerType": "API",
+      "apiPath": "sar-kpi-get-prod",
+      "properties": {
+        "Trigger name": "sar-kpi-get-prod"
+      }
+    }
+  ],
+  "connection_overrides": [
+    {
+      "taskId": "2",
+      "task": "GenericConnectorTask",
+      "parameters": {
+        "connectionName": "sar-kpi-db-prod"
+      }
+    }
+  ],
+  "integration_overrides": {
+    "databasePersistencePolicy": "DATABASE_PERSISTENCE_POLICY_UNSPECIFIED",
+    "enableVariableMasking": false,
+    "cloudLoggingDetails": {
+      "cloudLoggingSeverity": "CLOUD_LOGGING_SEVERITY_UNSPECIFIED",
+      "enableCloudLogging": false
+    }
+  }
+}

@@ -29,6 +29,16 @@ fi
 # shellcheck source=/dev/null
 source "${ENV_FILE}"
 
+# Prod guard (AGENTS.md rule 2, P8): the prod project only inside Cloud Build with TARGET=prod
+# (infra/lib/guard.sh, exit 2), and <env> must agree with the env file's project.
+# shellcheck source=../infra/lib/guard.sh
+source "${REPO_ROOT}/infra/lib/guard.sh"
+infra_guard "db/load.sh"
+if [[ "${TARGET_ENV}" == "prod" && "${IS_PROD}" != "1" ]] || [[ "${TARGET_ENV}" != "prod" && "${IS_PROD}" == "1" ]]; then
+  echo "REFUSED (db/load.sh): env '${TARGET_ENV}' does not match the project ${PROJECT_ID} of ${ENV_FILE}." >&2
+  exit 2
+fi
+
 DATABASE="kpis_${TARGET_ENV}"
 echo "============================================================"
 echo "Loading schema and seed data into ${DATABASE} on ${SQL_INSTANCE}"

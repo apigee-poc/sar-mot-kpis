@@ -32,6 +32,12 @@ fi
 # shellcheck source=/dev/null
 source "${ENV_FILE}"
 
+# Prod guard (AGENTS.md rule 2, P8): prod only inside Cloud Build with TARGET=prod; refuses a
+# TARGET/project mismatch. Runs before any gcloud call.
+# shellcheck source=lib/guard.sh
+source "${SCRIPT_DIR}/lib/guard.sh"
+infra_guard "$(basename "${BASH_SOURCE[0]}")"
+
 # Hard guard (AGENTS.md rule 2): non-prod only.
 PROD_PROJECT="apigee-prod-511508"
 NONPROD_PROJECT="apigee-nonprod-511322"

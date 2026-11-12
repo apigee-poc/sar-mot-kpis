@@ -1,0 +1,39 @@
+{
+  "description": "SAR MOT KPIs Cloud SQL PostgreSQL connection for prod",
+  "connectorDetails": {
+    "provider": "default",
+    "name": "postgresql",
+    "version": 1
+  },
+  "configVariables": [
+    {
+      "key": "database_name",
+      "stringValue": "kpis_prod"
+    }
+  ],
+  "serviceAccount": "sa-kpi-connector@apigee-prod-511508.iam.gserviceaccount.com",
+  "authConfig": {
+    "authType": "USER_PASSWORD",
+    "userPassword": {
+      "username": "kpi_reader",
+      "password": {
+        "secretVersion": "projects/apigee-prod-511508/secrets/sar-kpi-db-reader-password/versions/__PROD_DB_SECRET_VERSION__"
+      }
+    }
+  },
+  "destinationConfigs": [
+    {
+      "key": "host",
+      "destinations": [
+        {
+          "host": "__PROD_ENDPOINT_ATTACHMENT_IP__",
+          "port": 5432
+        }
+      ]
+    }
+  ],
+  "nodeConfig": {
+    "minNodeCount": 1,
+    "maxNodeCount": 1
+  }
+}

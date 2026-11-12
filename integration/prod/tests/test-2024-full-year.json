@@ -1,0 +1,81 @@
+{
+  "displayName": "test-2024-full-year",
+  "description": "total_freight 2024, all quarters: 4 rows.",
+  "triggerId": "api_trigger/sar-kpi-get-prod",
+  "testInputParameters": [
+    {
+      "key": "kpiCode",
+      "dataType": "STRING_VALUE",
+      "defaultValue": {
+        "stringValue": "total_freight"
+      },
+      "displayName": "kpiCode",
+      "inputOutputType": "IN"
+    },
+    {
+      "key": "year",
+      "dataType": "INT_VALUE",
+      "defaultValue": {
+        "intValue": "2024"
+      },
+      "displayName": "year",
+      "inputOutputType": "IN"
+    },
+    {
+      "key": "quarter",
+      "dataType": "INT_VALUE",
+      "defaultValue": {
+        "intValue": "0"
+      },
+      "displayName": "quarter",
+      "inputOutputType": "IN"
+    }
+  ],
+  "testTaskConfigs": [
+    {
+      "taskNumber": "1",
+      "task": "JavaScriptTask",
+      "mockConfig": {
+        "mockStrategy": "NO_MOCK_STRATEGY"
+      },
+      "assertions": [
+        {
+          "assertionStrategy": "ASSERT_SUCCESSFUL_EXECUTION"
+        }
+      ]
+    },
+    {
+      "taskNumber": "2",
+      "task": "GenericConnectorTask",
+      "mockConfig": {
+        "mockStrategy": "NO_MOCK_STRATEGY"
+      },
+      "assertions": [
+        {
+          "assertionStrategy": "ASSERT_SUCCESSFUL_EXECUTION"
+        }
+      ]
+    },
+    {
+      "taskNumber": "3",
+      "task": "JavaScriptTask",
+      "mockConfig": {
+        "mockStrategy": "NO_MOCK_STRATEGY"
+      },
+      "assertions": [
+        {
+          "assertionStrategy": "ASSERT_SUCCESSFUL_EXECUTION"
+        },
+        {
+          "assertionStrategy": "ASSERT_EQUALS",
+          "parameter": {
+            "key": "data",
+            "value": {
+              "jsonValue": "{\"records\":[{\"quarter\":1,\"year\":2024,\"actual\":1350000,\"loadTime\":\"2024-04-05T02:00:00Z\"},{\"quarter\":2,\"year\":2024,\"actual\":1395000,\"loadTime\":\"2024-07-05T02:00:00Z\"},{\"quarter\":3,\"year\":2024,\"actual\":1480000,\"loadTime\":\"2024-10-05T02:00:00Z\"},{\"quarter\":4,\"year\":2024,\"actual\":1520000,\"loadTime\":\"2025-01-05T02:00:00Z\"}]}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

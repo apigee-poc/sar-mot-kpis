@@ -4,7 +4,13 @@ const vm = require('vm');
 const { expect } = require('chai');
 
 const ROOT = path.join(__dirname, '..', '..', 'integration');
-const ENVS = ['dev', 'staging'];
+const ENVS = ['dev', 'staging', 'prod'];
+// Per-env GCP project of the connection/connector (D21, P8).
+const PROJECT = { dev: 'apigee-nonprod-511322', staging: 'apigee-nonprod-511322', prod: 'apigee-prod-511508' };
+const NONPROD_TENANT = 'ef911070c468726ff-tp';
+// integration/prod holds this placeholder for the Connectors tenant project; only
+// scripts/apply-integration-prod.sh resolves it at build time (runtimeConfig, P8).
+const PROD_TENANT_PLACEHOLDER = '__PROD_CONNECTORS_TENANT_PROJECT__';
 
 function readJson(rel) {
   return JSON.parse(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
@@ -98,28 +104,79 @@ const transformScript = task(integration, '3').parameters.script.value.stringVal
 const dataSchema = JSON.parse(integration.integrationParameters.find((p) => p.key === 'data').jsonSchema);
 
 describe('integration sar-kpi-get: structure', () => {
-  it('dev and staging src files are identical except the env connection and trigger', () => {
+  it('dev, staging and prod src files are identical except env connection, trigger, project and tenant', () => {
     // Replace every env-specific token with a placeholder; what remains must be identical.
     const normalise = (env) => fs.readFileSync(path.join(ROOT, srcFile(env)), 'utf8')
       .replace(/\r\n/g, '\n')
       .split(`sar-kpi-db-${env}`).join('sar-kpi-db-<env>')
-      .split(`sar-kpi-get-${env}`).join('sar-kpi-get-<env>');
+      .split(`sar-kpi-get-${env}`).join('sar-kpi-get-<env>')
+      .split(`projects/${PROJECT[env]}/`).join('projects/<project>/')
+      .split(`projects/${NONPROD_TENANT}/`).join('projects/<tenant>/')
+      .split(`projects/${PROD_TENANT_PLACEHOLDER}/`).join('projects/<tenant>/');
     expect(normalise('dev')).to.equal(normalise('staging'));
+    expect(normalise('prod')).to.equal(normalise('staging'));
+  });
+
+  it('the prod tenant placeholder is only in integration/prod, and the prod src holds it once', () => {
+    const walk = (d) => fs.readdirSync(d, { withFileTypes: true })
+      .flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+    walk(ROOT).forEach((f) => {
+      const rel = path.relative(ROOT, f).replace(/\\/g, '/');
+      if (rel.startsWith('prod/') || rel === 'connectors/sar-kpi-db-prod.json') {
+        return;
+      }
+      const text = fs.readFileSync(f, 'utf8');
+      expect(text, rel).to.not.contain(PROD_TENANT_PLACEHOLDER);
+      expect(text, rel).to.not.contain('apigee-prod-511508');
+    });
+    const prodSrc = fs.readFileSync(path.join(ROOT, srcFile('prod')), 'utf8');
+    expect(prodSrc.split(PROD_TENANT_PLACEHOLDER)).to.have.length(2);
+    expect(prodSrc).to.not.contain(NONPROD_TENANT);
+    expect(prodSrc).to.not.contain('apigee-nonprod-511322');
+    const cfg = JSON.parse(task(readJson(srcFile('prod')), '2').parameters.config.value.jsonValue).connection;
+    expect(cfg.serviceName)
+      .to.equal(`projects/${PROD_TENANT_PLACEHOLDER}/locations/us-central1/namespaces/connectors/services/runtime`);
+    expect(cfg.connectorVersion)
+      .to.equal('projects/apigee-prod-511508/locations/global/providers/default/connectors/postgresql/versions/1');
+  });
+
+  it('prod test-configs are identical to staging', () => {
+    const files = fs.readdirSync(path.join(ROOT, 'staging', 'test-configs'));
+    expect(fs.readdirSync(path.join(ROOT, 'prod', 'test-configs'))).to.deep.equal(files);
+    files.forEach((f) => {
+      expect(fs.readFileSync(path.join(ROOT, 'prod', 'test-configs', f), 'utf8'), f)
+        .to.equal(fs.readFileSync(path.join(ROOT, 'staging', 'test-configs', f), 'utf8'));
+    });
+  });
+
+  it('the prod connection template has no hard-coded IP, password or non-prod value', () => {
+    const text = fs.readFileSync(path.join(ROOT, 'connectors', 'sar-kpi-db-prod.json'), 'utf8');
+    const j = JSON.parse(text);
+    expect(j.configVariables).to.deep.equal([{ key: 'database_name', stringValue: 'kpis_prod' }]);
+    expect(j.serviceAccount).to.equal('sa-kpi-connector@apigee-prod-511508.iam.gserviceaccount.com');
+    expect(j.destinationConfigs[0].destinations[0]).to.deep.equal({ host: '__PROD_ENDPOINT_ATTACHMENT_IP__', port: 5432 });
+    expect(j.authConfig.userPassword.password).to.deep.equal({
+      secretVersion: 'projects/apigee-prod-511508/secrets/sar-kpi-db-reader-password/versions/__PROD_DB_SECRET_VERSION__'
+    });
+    expect(text).to.not.match(/\b\d{1,3}(\.\d{1,3}){3}\b/);
+    expect(text).to.not.match(/nonprod|ef911070c468726ff-tp|kpis_dev|kpis_staging|secretValue|passwordDetails/);
   });
 
   it('each env src and override reference only that env connection and trigger', () => {
     ENVS.forEach((env) => {
-      const other = ENVS.find((e) => e !== env);
+      const others = ENVS.filter((e) => e !== env);
       const src = readJson(srcFile(env));
       const srcText = fs.readFileSync(path.join(ROOT, srcFile(env)), 'utf8');
       const overridesText = fs.readFileSync(path.join(ROOT, env, 'overrides', 'overrides.json'), 'utf8');
       const cfg = JSON.parse(task(src, '2').parameters.config.value.jsonValue);
       expect(cfg.connection.connectionName)
-        .to.equal(`projects/apigee-nonprod-511322/locations/us-central1/connections/sar-kpi-db-${env}`);
+        .to.equal(`projects/${PROJECT[env]}/locations/us-central1/connections/sar-kpi-db-${env}`);
       expect(src.triggerConfigs[0].triggerId).to.equal(`api_trigger/sar-kpi-get-${env}`);
       [srcText, overridesText].forEach((text) => {
-        expect(text).to.not.contain(`sar-kpi-db-${other}`);
-        expect(text).to.not.contain(`sar-kpi-get-${other}`);
+        others.forEach((other) => {
+          expect(text, `${env} vs ${other}`).to.not.contain(`sar-kpi-db-${other}`);
+          expect(text, `${env} vs ${other}`).to.not.contain(`sar-kpi-get-${other}`);
+        });
       });
     });
   });
